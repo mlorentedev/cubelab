@@ -228,7 +228,18 @@ def test_the_scan_finds_the_workflows_that_call_a_reusable_one():
 
 
 def test_no_nested_job_requests_more_than_its_caller_grants():
-    """The guard proper. Red on `staging-deploy.yml` before #1666's fix."""
+    """The guard proper. Red on `staging-deploy.yml` before #1666's fix.
+
+    **Covers one hop.** It weighs a callee's job requests against its immediate
+    caller. A callee job that is itself a `uses:` call declares no
+    `permissions:` of its own, so the chain stops there and a requirement two
+    levels down is never reached — `ci.yml` -> `ci-pipeline.yml` ->
+    `ci-publish.yml` is satisfied today only because `ci.yml` happens to grant
+    `security-events: write`. Remove that line and this test stays green while
+    the real run would fail to start. Measured, and tracked as #1691.
+
+    Green here therefore means "no one-hop violation", not "no violation".
+    """
     offenders: list[str] = []
     for path, workflow in _callers():
         offenders += _violations_in(
@@ -245,7 +256,8 @@ def test_no_nested_job_requests_more_than_its_caller_grants():
         "nothing red:\n  " + "\n  ".join(offenders) + "\n\nA caller's "
         "`permissions:` block is a ceiling: every scope it does not name is "
         "`none`. Grant the scope in the caller (see release.yml), or stop "
-        "requesting it in the called workflow's job."
+        "requesting it in the called workflow's job.\n\nNote this checks ONE "
+        "hop; a violation two levels down is not reached (#1691)."
     )
 
 
