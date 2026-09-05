@@ -44,10 +44,21 @@ def sign(payload: bytes) -> str:
     return f"sha256={hmac.new(SECRET.encode(), payload, hashlib.sha256).hexdigest()}"
 
 
-def run_node(js: str, this_json: Any, prior: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Execute one code node, mocking n8n's `$json` and `$('Node').first().json`."""
+def run_node(js: str, items: list[Any], prior: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Execute one code node against a list of n8n INPUT ITEMS.
+
+    `items` is what the upstream node emitted, one entry per item -- not a single
+    `$json`. That distinction is the point: n8n passes data between nodes as an
+    array of items, and an HTTP node handed a JSON array emits one item PER
+    ELEMENT. A helper that mocked `$json` as the whole array would encode a
+    belief about n8n's item model and then certify it (lesson 413) -- the node
+    would pass every test and, in production, read the first task as if it were
+    the list.
+    """
     script = f"""
-    const $json = {json.dumps(this_json)};
+    const ITEMS = {json.dumps(items)};
+    const $input = {{ all: () => ITEMS.map(j => ({{ json: j }})) }};
+    const $json = ITEMS[0];
     const PRIOR = {json.dumps(prior or {})};
     const $ = (name) => ({{ first: () => ({{ json: PRIOR[name] }}) }});
     const $env = {{}};
@@ -58,6 +69,28 @@ def run_node(js: str, this_json: Any, prior: dict[str, Any] | None = None) -> di
     """
     proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True)
     return json.loads(proc.stdout.strip())
+
+
+#: The shapes an HTTP node's output can take, as separate item lists. Every code
+#: node is exercised against ALL of them, because which one arrives is a property
+#: of n8n and the response body, not something the workflow chooses.
+def split_items(records: list[dict[str, Any]]) -> list[Any]:
+    """One item per array element -- what an HTTP node emits for a JSON array."""
+    return list(records)
+
+
+def wrapped_array(records: list[dict[str, Any]]) -> list[Any]:
+    """A single item whose json IS the array."""
+    return [records]
+
+
+def wrapped_data(records: list[dict[str, Any]]) -> list[Any]:
+    """A single item shaped `{data: [...]}`, the paginated form."""
+    return [{"data": records}]
+
+
+EMPTY_ITEM: list[Any] = [{}]  # what `alwaysOutputData` emits when there is no data
+ERROR_ITEM: list[Any] = [{"error": "401 unauthorized"}]  # what `continueOnFail` emits
 
 
 def parse_event(body: dict[str, Any]) -> dict[str, Any]:
@@ -232,35 +265,73 @@ def test_the_pull_request_chain_still_ends_where_it_did() -> None:
 # ── Idempotence (AC2) ─────────────────────────────────────────────────────────
 
 
+PARSED = {"Parse Forge Event": {"taskKey": "TOOL-035", "title": "TOOL-035: forge", "issueUrl": "u",
+                                "repoOwner": "kubelab", "repoName": "kubelab", "issueNumber": 7}}
+
+
 def test_an_existing_task_is_matched_exactly_not_by_substring() -> None:
     """`?s=` is a substring search. Taking `results[0]` -- what the pull-request
     path does -- would decide `TOOL-035` already exists because `TOOL-0350` does,
-    and never create it, with a 200 on the way out."""
-    prior = {"Parse Forge Event": {"taskKey": "TOOL-035", "title": "TOOL-035: forge", "issueUrl": "u",
-                                   "repoOwner": "kubelab", "repoName": "kubelab", "issueNumber": 7}}
+    and never create it, with a 200 on the way out.
+
+    Run against all three item shapes: which one arrives is decided by n8n and
+    the response body, not by the workflow, so a node that is only correct for
+    one of them is only accidentally correct.
+    """
     js = node_js("Extract Issue Task Match")
 
-    only_a_longer_key = run_node(js, [{"id": 99, "title": "TOOL-0350: something else"}], prior)
-    assert only_a_longer_key["taskAlreadyExists"] is False
-    assert only_a_longer_key["existingTaskId"] is None
+    for shape in (split_items, wrapped_array, wrapped_data):
+        longer = run_node(js, shape([{"id": 99, "title": "TOOL-0350: something else"}]), PARSED)
+        assert longer["taskAlreadyExists"] is False, shape.__name__
+        assert longer["existingTaskId"] is None, shape.__name__
 
-    for title in ["TOOL-035: forge", "TOOL-035-forge-migration"]:
-        found = run_node(js, [{"id": 42, "title": title}], prior)
-        assert found["taskAlreadyExists"] is True, title
-        assert found["existingTaskId"] == 42
+        for title in ["TOOL-035: forge", "TOOL-035-forge-migration"]:
+            found = run_node(js, shape([{"id": 42, "title": title}]), PARSED)
+            assert found["taskAlreadyExists"] is True, f"{shape.__name__}/{title}"
+            assert found["existingTaskId"] == 42, f"{shape.__name__}/{title}"
+
+
+def test_a_multi_result_search_still_finds_the_exact_task() -> None:
+    """The split shape is the one that bites: with several results, `$json` is
+    the FIRST task rather than the list. A node reading `$json` would see one
+    task, fail `Array.isArray`, fall through to no results, and create a
+    duplicate of a task it was looking straight at."""
+    results = [{"id": 99, "title": "TOOL-0350: other"}, {"id": 42, "title": "TOOL-035: forge"}]
+    found = run_node(node_js("Extract Issue Task Match"), split_items(results), PARSED)
+    assert found["taskAlreadyExists"] is True
+    assert found["existingTaskId"] == 42
+
+
+def test_an_empty_search_result_creates() -> None:
+    """The primary case this whole path exists for: a new issue, no task yet.
+
+    `alwaysOutputData` on the request node makes it emit `{}` rather than no item
+    at all -- a node with no input does not run, so without it the chain would
+    stop dead here and the webhook would time out with nothing answered.
+    """
+    for items in (EMPTY_ITEM, split_items([]), wrapped_array([])):
+        result = run_node(node_js("Extract Issue Task Match"), items or EMPTY_ITEM, PARSED)
+        assert result["taskAlreadyExists"] is False
+        assert result["searchFailed"] is False
 
 
 def test_a_failed_search_is_not_an_empty_search() -> None:
     """`continueOnFail` turns a 401 into an item carrying `error`, which is
     shaped exactly like 'found nothing'. Creating on it duplicates a task that
     already exists."""
-    prior = {"Parse Forge Event": {"taskKey": "TOOL-035", "title": "TOOL-035: forge", "issueUrl": "u",
-                                   "repoOwner": "kubelab", "repoName": "kubelab", "issueNumber": 7}}
-    result = run_node(node_js("Extract Issue Task Match"), {"error": "401 unauthorized"}, prior)
+    result = run_node(node_js("Extract Issue Task Match"), ERROR_ITEM, PARSED)
     assert result["searchFailed"] is True
 
-    picked = run_node(node_js("Pick Project for Repo"), [{"id": 3, "title": "kubelab"}],
+    picked = run_node(node_js("Pick Project for Repo"), split_items([{"id": 3, "title": "kubelab"}]),
                       {"Extract Issue Task Match": result})
+    assert picked["readyToCreate"] is False
+
+
+def test_a_failed_project_lookup_blocks_the_create() -> None:
+    prior = {"Extract Issue Task Match": {"repoOwner": "kubelab", "repoName": "kubelab",
+                                          "searchFailed": False}}
+    picked = run_node(node_js("Pick Project for Repo"), ERROR_ITEM, prior)
+    assert picked["projectLookupFailed"] is True
     assert picked["readyToCreate"] is False
 
 
@@ -270,12 +341,8 @@ def test_the_created_title_carries_the_key_as_a_prefix() -> None:
     prior_mid = {"Parse Forge Event": {"taskKey": "TOOL-035", "title": "fix the TOOL-035 thing",
                                        "issueUrl": "u", "repoOwner": "kubelab", "repoName": "kubelab",
                                        "issueNumber": 7}}
-    assert run_node(node_js("Extract Issue Task Match"), [], prior_mid)["taskTitle"].startswith("TOOL-035")
-
-    prior_prefixed = {"Parse Forge Event": {"taskKey": "TOOL-035", "title": "TOOL-035: forge",
-                                            "issueUrl": "u", "repoOwner": "kubelab", "repoName": "kubelab",
-                                            "issueNumber": 7}}
-    assert run_node(node_js("Extract Issue Task Match"), [], prior_prefixed)["taskTitle"] == "TOOL-035: forge"
+    assert run_node(node_js("Extract Issue Task Match"), EMPTY_ITEM, prior_mid)["taskTitle"].startswith("TOOL-035")
+    assert run_node(node_js("Extract Issue Task Match"), EMPTY_ITEM, PARSED)["taskTitle"] == "TOOL-035: forge"
 
 
 # ── Project resolution fails closed ───────────────────────────────────────────
@@ -287,18 +354,23 @@ def test_an_unmatched_repository_does_not_fall_back_to_a_default_project() -> No
     an arbitrary project invisibly and forever."""
     prior = {"Extract Issue Task Match": {"repoOwner": "teledyne", "repoName": "fae-brain",
                                           "searchFailed": False}}
-    result = run_node(node_js("Pick Project for Repo"), [{"id": 1, "title": "Inbox"}], prior)
-    assert result["projectId"] is None
-    assert result["readyToCreate"] is False
+    for shape in (split_items, wrapped_array, wrapped_data):
+        result = run_node(node_js("Pick Project for Repo"), shape([{"id": 1, "title": "Inbox"}]), prior)
+        assert result["projectId"] is None, shape.__name__
+        assert result["readyToCreate"] is False, shape.__name__
 
 
 def test_the_repository_name_wins_over_the_owning_organisation() -> None:
+    """Also the split-shape regression: with two projects, `$json` is the first
+    one. A node reading it as the list would match nothing and answer 422 for
+    every repository, forever."""
     prior = {"Extract Issue Task Match": {"repoOwner": "kubelab", "repoName": "kubelab-cli",
                                           "searchFailed": False}}
     projects = [{"id": 3, "title": "kubelab"}, {"id": 9, "title": "kubelab-cli"}]
-    result = run_node(node_js("Pick Project for Repo"), projects, prior)
-    assert result["projectId"] == 9
-    assert result["readyToCreate"] is True
+    for shape in (split_items, wrapped_array, wrapped_data):
+        result = run_node(node_js("Pick Project for Repo"), shape(projects), prior)
+        assert result["projectId"] == 9, shape.__name__
+        assert result["readyToCreate"] is True, shape.__name__
 
 
 # ── The graph's own honesty ───────────────────────────────────────────────────
@@ -316,6 +388,36 @@ def test_a_blocked_create_answers_non_2xx() -> None:
     indistinguishable from a task that was created."""
     assert node("Respond Create Blocked")["parameters"]["options"]["responseCode"] == 422
     assert node("Respond Task Created")["parameters"]["options"]["responseCode"] == 201
+
+
+def test_a_search_that_finds_nothing_still_emits_an_item() -> None:
+    """A node that yields no data emits NO ITEM, and a node with no input does
+    not run. `GET /tasks?s=<a brand-new key>` returning `[]` is the primary case
+    this path exists for -- without `alwaysOutputData` the chain stops dead
+    there, no respond node fires, and the webhook times out. Nothing about that
+    failure names its cause."""
+    for name in ("Find Task for Issue", "Resolve Vikunja Project"):
+        assert node(name).get("alwaysOutputData") is True, name
+
+
+def test_the_post_create_nodes_read_the_event_from_the_node_that_holds_it() -> None:
+    """`$json` at a node is that node's INPUT. After `Create Task from Issue`
+    the input is Vikunja's created-task object, so a bare `$json.taskKey` is
+    `undefined` -- the notice would read "Task created: undefined" and
+    `JSON.stringify` would silently drop the undefined fields from the 201 body.
+
+    Both nodes must reach back to `Pick Project for Repo` for the event, and the
+    only field they may take from `$json` is the new task's `id`.
+    """
+    for name, key in [("Notify Task Created", "jsonBody"), ("Respond Task Created", "responseBody")]:
+        body = node(name)["parameters"][key]
+        assert "$('Pick Project for Repo')" in body, name
+        for field in ("taskKey", "repoOwner", "repoName", "issueNumber", "projectTitle", "projectId", "issueUrl"):
+            assert f"$json.{field}" not in body, f"{name} reads $json.{field}, which is undefined there"
+
+    assert "$json.id" in node("Respond Task Created")["parameters"]["responseBody"], (
+        "the created task's id is the cheapest observable that a task exists (#1659)"
+    )
 
 
 def test_the_creation_notice_does_not_announce_a_bucket() -> None:

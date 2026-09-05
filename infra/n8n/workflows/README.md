@@ -90,9 +90,30 @@ a task somebody finished.
   the forge records a failed delivery — a task filed in the wrong project looks
   exactly like one filed correctly.
 - **The create request has no `continueOnFail`**, so a create that 401s cannot reach
-  the notification or the 201. The notice names only what happened (a task was
-  created) and deliberately does not name a bucket — `targetBucket` is computed and
-  never written to Vikunja (#1687).
+  the notification or the 201. The 201 carries the new task's `id` — the cheapest
+  observable that a task exists (#1659). The notice names only what happened (a task
+  was created) and deliberately does not name a bucket — `targetBucket` is computed
+  and never written to Vikunja (#1687).
+
+### Two n8n behaviours the code nodes depend on
+
+Both are properties of n8n's item model rather than choices this workflow makes, and
+both are pinned by tests, because getting either wrong fails in a way that reads as
+something else entirely:
+
+- **An HTTP node handed a JSON array emits one item per element.** So `$json` in the
+  following Code node is the *first* task or project, not the list. Every code node
+  here reads `$input.all()` and normalises the shape; reading `$json` would make the
+  search find nothing while looking straight at the results — creating a duplicate —
+  and make project resolution answer 422 for every repository.
+- **A node that yields no data emits no item, and a node with no input does not run.**
+  `GET /tasks?s=<a brand-new key>` returning `[]` is the primary case the create path
+  exists for, so both GET nodes set `alwaysOutputData`. Without it the chain stops
+  dead, no respond node fires, and the webhook times out.
+
+The same reasoning applies after the create request: `$json` there is Vikunja's new
+task object, so both post-create nodes reach back with `$('Pick Project for Repo')`
+for the event and take only `id` from `$json`.
 
 Trigger floor: `opened` and `reopened`, which is exactly what the
 `add-to-project.yml` this replaces fired on. `closed`/`edited` answer 200 without
