@@ -35,4 +35,4 @@ Verified live on staging (Argo CD repointed at the branch per lesson-256, Grafan
 
 **Rule**: "Retire a provisioned object" is two operations — stop declaring it, and tell the system to forget it — and only the first is visible from the repo. When a retired alert keeps firing, read what the target *evaluates*, not what the repo *declares*; a Synced overlay proves the declaration, never the target's state. `deleteRules` entries are permanent: a missing rule costs nothing on every start, while removing the entry re-arms the failure for any instance restored from an older backup.
 
-**Tags**: `#grafana` `#alerting` `#provisioning` `#argocd` `#false-green` `#pr-1610` `#obs-1583`
+**Tags**: `#grafana` `#alerting` `#provisioning` `#argocd` `#false-green` `#pr-1610` `#1583`

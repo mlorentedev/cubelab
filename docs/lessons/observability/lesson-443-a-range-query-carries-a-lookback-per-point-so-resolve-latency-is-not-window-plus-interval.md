@@ -32,4 +32,4 @@ The advice is acted on. Told 45m, the operator re-runs into a second refusal (#1
 
 **Rule**: Never derive an alert's resolve latency from the rule text; measure it once from the evaluation log and record the trace next to the number. A range query's effective lookback is window + range, not window. When a figure appears in operator-facing text, the guard belongs on the text that quotes it, scanning every module that renders a message, not on the constant.
 
-**Tags**: `#grafana` `#alerting` `#loki` `#range-query` `#drill` `#hardcoded-numbers` `#pr-1667` `#obs-1583`
+**Tags**: `#grafana` `#alerting` `#loki` `#range-query` `#drill` `#hardcoded-numbers` `#pr-1667` `#1583`

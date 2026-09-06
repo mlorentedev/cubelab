@@ -32,4 +32,4 @@ PersistentVolumeClaim unbound or failed: FIRING after 0.0m (1 polls)
 
 **Rule**: When a check proves causation ("my action made X happen"), assert the edge, not the level: establish that X was *not* true before acting, or refuse to conclude. If a precondition fails, exit with a code distinct from the failure being tested for — an unmeasurable run and a failing run must never look alike to a script. Only a run against a system that already had the condition could expose this; reading the code, every unit test passed and the PR was reviewed.
 
-**Tags**: `#grafana` `#alerting` `#drill` `#edge-vs-level` `#exit-codes` `#verification` `#pr-1654` `#obs-1583`
+**Tags**: `#grafana` `#alerting` `#drill` `#edge-vs-level` `#exit-codes` `#verification` `#pr-1654` `#1583`
