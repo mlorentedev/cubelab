@@ -15,26 +15,11 @@ spec:
     requests:
       storage: 1Gi
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: n8n-config
-  namespace: kubelab
-  labels:
-    app.kubernetes.io/name: n8n
-    app.kubernetes.io/component: core
-    app.kubernetes.io/part-of: kubelab
-data:
-  # Domain from: apps.services.automation.n8n.domain (staging.yaml)
-  N8N_HOST: "n8n.staging.kubelab.live"
-  N8N_PROTOCOL: "https"
-  WEBHOOK_URL: "https://n8n.staging.kubelab.live/"
-  N8N_PROXY_HOPS: "1"
-  DB_TYPE: "sqlite"
-  GENERIC_TIMEZONE: "Europe/Madrid"
-  N8N_LOG_LEVEL: "info"
-  N8N_LOG_OUTPUT: "console"
-  N8N_MIGRATE_FS_STORAGE_PATH: "true"
+# The `n8n-config` ConfigMap is NOT declared here. It is generated from
+# `services/n8n-config/n8n.env` by the `configMapGenerator` in
+# `base/kustomization.yaml`, so its name carries a content hash and an edit
+# rolls the Deployment (lesson-404, #1446 — and #1705, where a plain ConfigMap
+# meant a Code-node setting could not have been changed without a hand restart).
 ---
 apiVersion: apps/v1
 kind: Deployment

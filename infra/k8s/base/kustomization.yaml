@@ -81,6 +81,16 @@ configMapGenerator:
     envs:
       - services/vikunja-config/vikunja.env
 
+  # n8n's env vars, same rationale as vikunja-config above (lesson-404) and the
+  # same failure already realised: n8n reads its environment once at container
+  # start, so as a plain ConfigMap the Code-node runtime flags added for #1705
+  # would have been Synced/Healthy and inert. Prod overlay merges its domain and
+  # log-level overrides via `behavior: merge` in overlays/prod/kustomization.yaml.
+  - name: n8n-config
+    namespace: kubelab
+    envs:
+      - services/n8n-config/n8n.env
+
   - name: authelia-assets
     namespace: kubelab
     files:

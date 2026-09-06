@@ -111,21 +111,13 @@ spec:
     # and read the emitted `tls:` block; the comment is not the behaviour.
     certResolver: null
 ---
-# Override base n8n ConfigMap with prod domain
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: n8n-config
-  namespace: kubelab
-data:
-  N8N_HOST: "n8n.kubelab.live"
-  N8N_PROTOCOL: "https"
-  N8N_PROXY_HOPS: "1"
-  WEBHOOK_URL: "https://n8n.kubelab.live/"
-  DB_TYPE: "sqlite"
-  GENERIC_TIMEZONE: "Europe/Madrid"
-  N8N_LOG_LEVEL: "warn"
-  N8N_LOG_OUTPUT: "console"
+# n8n's prod ConfigMap is NOT patched here any more. `n8n-config` is generated
+# (#1705), and a strategic-merge patch cannot target a generated object by its
+# base name — the emitted name carries a content hash. The prod overrides moved
+# to a `configMapGenerator` with `behavior: merge` in this overlay's
+# kustomization.yaml, which also means they are applied BEFORE hashing, so
+# staging and prod get different hashes. That difference is the evidence the
+# overlay is live; identical hashes would mean it was silently dropped.
 ---
 # Override base n8n IngressRoute with prod domain
 apiVersion: traefik.io/v1alpha1

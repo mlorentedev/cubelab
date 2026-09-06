@@ -51,6 +51,17 @@ configMapGenerator:
     envs:
       - vikunja-config/vikunja.env
 
+  # Prod's domain + log-level overrides for n8n-config (#1705). `merge` — only
+  # these four keys differ, and in particular the Code-node runtime flags
+  # (N8N_BLOCK_ENV_ACCESS_IN_NODE, NODE_FUNCTION_ALLOW_BUILTIN) carry through
+  # from the base. `replace` here would drop them and restore the outage in the
+  # one environment where the forge webhooks actually point.
+  - name: n8n-config
+    namespace: kubelab
+    behavior: merge
+    envs:
+      - n8n-config/n8n.env
+
 # Override base resources with prod-specific domains and config
 patches:
   - path: patches.yaml
