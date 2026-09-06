@@ -379,3 +379,51 @@ apps:
             assert new_svc["isPublic"] is True
             assert new_svc["url"] == "https://tool.kubelab.live"
             assert new_svc["healthEndpoint"] == "https://tool.kubelab.live/health"
+
+    def test_resolve_node_status_offline(self, tmp_path: Path) -> None:
+        mock_yaml = tmp_path / "common.yaml"
+        mock_yaml.write_text(
+            """
+networking:
+  vps:
+    location: "always-on"
+    status: "offline"
+clusters: {}
+apps: {}
+""",
+            encoding="utf-8",
+        )
+        manifest = platform_manifest.generate_manifest(config_path=mock_yaml)
+        vps = next(n for n in manifest["nodes"] if n["id"] == "vps")
+        assert vps["status"] == "offline"
+        # Offline node must not be counted in activeNodes
+        assert manifest["cluster"]["activeNodes"] == 0
+
+    def test_zero_addressing_guard_does_not_falsely_catch_mac_address(self, monkeypatch) -> None:
+        mutated_services = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
+        mutated_services.append(
+            {
+                "slug": "mac-node",
+                "name": "MAC Node",
+                "category": "Core Gateway",
+                "categoryEs": "Gateway Principal",
+                "description": "Hardware MAC interface 00:11:22:33:44:55",
+                "descriptionEs": "Interfaz MAC",
+                "node": "vps",
+                "env": "prod",
+                "tech": ["Linux"],
+                "isPublic": False,
+                "status": "operational",
+            }
+        )
+        monkeypatch.setattr(platform_manifest, "SERVICE_CATALOG_DEFAULTS", mutated_services)
+        # Must generate cleanly without raising IPv6 error
+        manifest = platform_manifest.generate_manifest()
+        mac_svc = next(s for s in manifest["services"] if s["slug"] == "mac-node")
+        assert "00:11:22:33:44:55" in mac_svc["description"]
+
+    def test_invalid_yaml_root_raises_value_error(self, tmp_path: Path) -> None:
+        invalid_yaml = tmp_path / "invalid.yaml"
+        invalid_yaml.write_text("- item1\n- item2\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="Invalid configuration format.*expected root mapping/dict"):
+            platform_manifest.generate_manifest(config_path=invalid_yaml)

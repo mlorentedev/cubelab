@@ -29,11 +29,12 @@ IPV4_REGEX = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 IPV6_REGEX = re.compile(
     r"(?i)(?<![0-9a-fA-F:])"
     r"(?:"
-    r"(?:[0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}"
+    r"(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}"
     r"|(?:[0-9a-fA-F]{1,4}:){1,7}:"
     r"|:(?::[0-9a-fA-F]{1,4}){1,7}"
     r"|(?:[0-9a-fA-F]{1,4}:)+:(?:[0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4}"
-    r"|fd[0-9a-fA-F]{2}:[0-9a-fA-F:]+"
+    r"|fd[0-9a-fA-F]{2}:(?:[0-9a-fA-F]{1,4}:){6}[0-9a-fA-F]{1,4}"
+    r"|fd[0-9a-fA-F]{2}:(?::?[0-9a-fA-F]{1,4}){1,6}"
     r")"
     r"(?![0-9a-fA-F:])"
 )
@@ -647,6 +648,8 @@ def _resolve_node_status(node_cfg: dict[str, Any]) -> tuple[str, bool]:
     """Return (status, is_active) for a fleet node."""
     if node_cfg.get("retired") or node_cfg.get("status") == "standby":
         return "standby", False
+    if node_cfg.get("status") == "offline":
+        return "offline", False
     if node_cfg.get("status") == "warning":
         return "warning", True
     return "healthy", True
@@ -847,6 +850,11 @@ def generate_manifest(config_path: Path | None = None, target_path: Path | None 
 
     with open(cfg_file, encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
+
+    if not isinstance(config, dict):
+        raise ValueError(
+            f"Invalid configuration format in {cfg_file}: expected root mapping/dict, got {type(config).__name__}"
+        )
 
     target = target_path or (DEFAULT_OUTPUT if config_path is None else None)
     generated_at, source_commit = _get_provenance(cfg_file, target)
