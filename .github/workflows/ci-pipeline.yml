@@ -42,7 +42,7 @@ jobs:
       extra_build_args: ${{ steps.web_build_args.outputs.args }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -101,7 +101,7 @@ jobs:
       # API
       - name: Set up Go (for api)
         if: steps.changes.outputs.should_build == 'true' && inputs.app == 'api'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7
         with:
           go-version: '1.25'
           cache-dependency-path: './apps/api/src/go.sum'
@@ -124,7 +124,7 @@ jobs:
       # Security Scanning - Secret Detection
       - name: Run gitleaks secret scanner
         if: steps.changes.outputs.should_build == 'true'
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -133,7 +133,7 @@ jobs:
       # Security Scanning - Python (toolkit)
       - name: Set up Python for security scanning
         if: steps.changes.outputs.should_build == 'true'
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: '3.12'
 
