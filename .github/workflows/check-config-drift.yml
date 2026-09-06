@@ -55,11 +55,11 @@ jobs:
     env:
       TARGET_ENV: ${{ matrix.env }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: '3.12'
 
@@ -126,7 +126,7 @@ jobs:
     # SOPS is unavailable (see _sops_available() in toolkit/cli/sync.py).
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           # depth-1 is enough today and this could go back to it. The reason it
           # was raised no longer exists: `platform-json` used to derive its
@@ -144,7 +144,7 @@ jobs:
           # that removes it and takes the reasoning with it.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: '3.12'
 
