@@ -166,7 +166,7 @@ class TestPlatformManifestEdgeCases:
         assert sha == source_hash
         assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", ts)
 
-    def test_zero_addressing_guard_catches_leaked_ip(self, monkeypatch) -> None:
+    def test_zero_addressing_guard_catches_leaked_ip(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mutated_services = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
         mutated_services.append(
             {
@@ -187,7 +187,7 @@ class TestPlatformManifestEdgeCases:
         with pytest.raises(ValueError, match="Zero-Addressing violation: IPv4 address detected"):
             platform_manifest.generate_manifest()
 
-    def test_zero_addressing_guard_catches_leaked_ipv6(self, monkeypatch) -> None:
+    def test_zero_addressing_guard_catches_leaked_ipv6(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for ipv6 in ["fd7a:115c:a1e0::/48", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "::1"]:
             mutated_services = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
             mutated_services.append(
@@ -209,7 +209,7 @@ class TestPlatformManifestEdgeCases:
             with pytest.raises(ValueError, match="Zero-Addressing violation: IPv6 address detected"):
                 platform_manifest.generate_manifest()
 
-    def test_zero_addressing_guard_catches_internal_hostname(self, monkeypatch) -> None:
+    def test_zero_addressing_guard_catches_internal_hostname(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mutated_services = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
         mutated_services.append(
             {
@@ -399,7 +399,7 @@ apps: {}
         # Offline node must not be counted in activeNodes
         assert manifest["cluster"]["activeNodes"] == 0
 
-    def test_zero_addressing_guard_does_not_falsely_catch_mac_address(self, monkeypatch) -> None:
+    def test_zero_addressing_guard_does_not_falsely_catch_mac_address(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mutated_services = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
         mutated_services.append(
             {

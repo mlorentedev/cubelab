@@ -128,14 +128,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Full history, not the depth-1 default: `platform-json` derives
-          # `source_commit`/`generated_at` from `git log -1 -- common.yaml`
-          # (platform_manifest.py:_get_commit_provenance). In a shallow clone
-          # that log can only answer with the tip, so the manifest regenerates
-          # against the wrong commit and the check reports drift that does not
-          # exist. Measured: depth-1 returns the branch tip, full history
-          # returns 6c4e283e, which is what the committed file carries. The
-          # other depth-1 jobs in this file do not run the sync set.
+          # depth-1 is enough today and this could go back to it. The reason it
+          # was raised no longer exists: `platform-json` used to derive its
+          # provenance from `git log -1 -- common.yaml`, which a shallow clone
+          # can only answer with the tip, so the manifest regenerated against
+          # the wrong commit and the job reported drift that was not there.
+          # That was real and measured. It was then fixed at the root instead —
+          # `compute_source_hash` is a pure-python git blob hash of the file and
+          # reads no history at all, so no checkout depth can affect it.
+          #
+          # Left at 0 deliberately rather than reverted in the same change that
+          # made it unnecessary: nothing else here needs history either, so the
+          # revert is free of risk and free of urgency, and a comment that
+          # explains why a setting is now redundant is worth more than a diff
+          # that removes it and takes the reasoning with it.
           fetch-depth: 0
 
       - uses: actions/setup-python@v7
