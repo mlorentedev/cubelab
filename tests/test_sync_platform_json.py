@@ -427,3 +427,85 @@ apps: {}
         invalid_yaml.write_text("- item1\n- item2\n", encoding="utf-8")
         with pytest.raises(ValueError, match="Invalid configuration format.*expected root mapping/dict"):
             platform_manifest.generate_manifest(config_path=invalid_yaml)
+
+    def test_a_warning_node_stays_active(self) -> None:
+        """`warning` is degraded, not down — it must still count toward activeNodes.
+
+        The three non-default statuses fall through one chain, and only the two that
+        deactivate a node had coverage. A `warning` that silently became `healthy`
+        would be indistinguishable from a healthy node in the published manifest,
+        which is the opposite of what declaring it is for.
+        """
+        status, active = platform_manifest._resolve_node_status({"status": "warning"})
+        assert (status, active) == ("warning", True)
+
+    def test_an_unreadable_existing_manifest_does_not_stop_generation(self, tmp_path: Path) -> None:
+        """A corrupt target is regenerated, not raised on.
+
+        `_get_provenance` reuses the previous `generated_at` when the source hash is
+        unchanged, which is what keeps `--check` idempotent. Reading that file is a
+        best-effort optimisation, so a truncated or non-JSON manifest has to fall
+        through to a fresh timestamp — otherwise a corrupt artifact makes the drift
+        gate unfixable by the very command that would repair it.
+        """
+        source = tmp_path / "common.yaml"
+        source.write_text("project_name: kubelab\n", encoding="utf-8")
+        target = tmp_path / "platform.json"
+        target.write_text("{ this is not json", encoding="utf-8")
+
+        generated_at, source_hash = platform_manifest._get_provenance(source, target)
+
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", generated_at)
+        assert source_hash == platform_manifest.compute_source_hash(source)
+
+    def test_a_version_already_prefixed_is_not_prefixed_twice(self, tmp_path: Path) -> None:
+        """`K3s K3s v1.34.4` is the bug this branch exists to prevent."""
+        mock_yaml = tmp_path / "prefixed.yaml"
+        mock_yaml.write_text('k3s:\n  version: "K3s v9.9.9"\n', encoding="utf-8")
+
+        manifest = platform_manifest.generate_manifest(config_path=mock_yaml)
+
+        assert manifest["cluster"]["version"] == "K3s v9.9.9"
+
+    def test_traefik_is_taken_from_edge_when_no_service_block_declares_it(self, tmp_path: Path) -> None:
+        """Traefik is declared under `edge`, not under `apps.services`, unlike everything else.
+
+        The fallback exists because of that asymmetry, and an untested fallback is
+        one nobody notices has stopped firing.
+        """
+        mock_yaml = tmp_path / "edge_only.yaml"
+        mock_yaml.write_text(
+            'edge:\n  traefik:\n    version: "v3.6.2"\n',
+            encoding="utf-8",
+        )
+
+        blocks = platform_manifest._collect_ssot_services(
+            {"edge": {"traefik": {"version": "v3.6.2"}}},
+        )
+
+        assert blocks["traefik"] == {"version": "v3.6.2"}
+
+    def test_non_mapping_entries_in_the_services_tree_are_skipped_not_crashed_on(self) -> None:
+        """`common.yaml` is hand-edited, so a category or service can be a string or null.
+
+        Each level guards with `isinstance`, and only the happy path had coverage —
+        so the guards were present and unproven, which is the shape this repo keeps
+        finding. A commented-out service left as a bare key parses as `None`.
+        """
+        blocks = platform_manifest._collect_ssot_services(
+            {
+                "apps": {
+                    "services": {
+                        "core": {"gitea": {"version": "1.24"}, "broken": None},
+                        "not_a_category": "just a string",
+                    }
+                }
+            },
+        )
+
+        assert blocks["gitea"] == {"version": "1.24"}
+        assert "broken" not in blocks
+        assert "not_a_category" not in blocks
+
+        # The outermost guard too: `apps.services` itself replaced by a scalar.
+        assert platform_manifest._collect_ssot_services({"apps": {"services": "oops"}}) == {}

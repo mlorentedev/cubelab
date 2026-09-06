@@ -9,15 +9,21 @@ created: "2026-09-05"
 
 Map every acceptance criterion from `proposal.md` to concrete proof:
 
-- [x] AC1 (Schema projection from SSOT) -> `tests/test_sync_platform_json.py::test_manifest_schema_and_counts`, `tests/test_sync_platform_json.py::test_nodes_projection`, `tests/test_sync_platform_json.py::test_services_projection`
-- [x] AC2 (Zero-Addressing isolation) -> `tests/test_sync_platform_json.py::test_zero_addressing_sanitization`, `tests/test_sync_platform_json.py::test_zero_addressing_guard_catches_leak`
-- [x] AC3 (Deterministic drift gating) -> `tests/test_sync_platform_json.py::test_drift_gate_across_simulated_commit_boundary`, `tests/test_sync_platform_json.py::test_drift_gate_detects_mutation`
+> Test names below are copied from the file, not written from memory. Three of the
+> names this section used to carry — `test_nodes_projection`,
+> `test_services_projection`, `test_zero_addressing_guard_catches_leak` — never
+> existed. Evidence that names a test nobody can run is indistinguishable from no
+> evidence, and it reads stronger than a blank.
+
+- [x] AC1 (Schema projection from SSOT) -> `test_manifest_schema_and_counts`, `test_dynamic_projection_from_mock_config` (mutates the mock SSOT and asserts the output follows), `test_dynamic_public_service_from_ssot`, `test_compute_total_services_calculation`
+- [x] AC2 (Zero-Addressing isolation) -> `test_zero_addressing_sanitization`, `test_zero_addressing_guard_catches_leaked_ip`, `test_zero_addressing_guard_catches_leaked_ipv6`, `test_zero_addressing_guard_catches_internal_hostname`, `test_zero_addressing_guard_does_not_falsely_catch_mac_address`
+- [x] AC3 (Deterministic drift gating) -> `test_drift_gate_across_simulated_commit_boundary`, `test_drift_gate_detects_mutation`, `test_drift_gate_missing_file_returns_error`, `test_provenance_determinism`, `test_provenance_content_hash`
 - [x] AC4 (Makefile integration) -> `make sync-platform-json-check` returns exit 0; `make validate-sync` passes cleanly.
-- [x] AC5 (Testing & safety boundary) -> 14 unit tests passing, 97% branch/line coverage on `toolkit/features/platform_manifest.py`.
+- [x] AC5 (Testing & safety boundary) -> 22 unit tests passing, **100%** branch/line coverage on `toolkit/features/platform_manifest.py`, which is what AC5 asks for. It was 97% while this line claimed 97% and the criterion said 100%; the gap was closed by covering the five real defensive paths that had none (corrupt existing manifest, `warning` node status, the `edge.traefik` fallback, non-mapping entries in the services tree, and an already-prefixed K3s version) rather than by rewording the criterion.
 
 ## Test status
 
-- Test suite: `.venv/bin/pytest tests/test_sync_platform_json.py -v` -> 14 passed in 10.08s, 97% coverage
+- Test suite: `poetry run pytest tests/test_sync_platform_json.py` -> 22 passed, 100% coverage
 - Manual smoke test: `make validate-sync` verifies `[SUCCESS] platform-json: in sync` and `[SUCCESS] All generated files in sync`
 - No regressions in existing test suite: yes (all tests green)
 
