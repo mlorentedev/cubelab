@@ -834,10 +834,19 @@ def project_services(config: dict[str, Any]) -> list[dict[str, Any]]:
 def compute_total_services(config: dict[str, Any]) -> int:
     """Calculate total services/workloads running across all clusters.
 
-    Note on the +2 offset: build_service_tables(config) returns staging (16)
-    and prod (17) user-facing services. The +2 offset accounts for core
-    infrastructure workloads (edge ingress gateway and kube-system) to preserve
-    the published platform total of 35 services on mlorente.dev/lab.
+    The `+ 2` is an OPEN QUESTION, not a formula. `build_service_tables` yields
+    16 staging and 17 prod services; the offset exists because `ba1a2dd6` needed
+    the derived figure to equal 35, the literal that change set removed, and 35
+    is published on mlorente.dev/lab. It is not known to correspond to two
+    particular workloads -- that commit claims no such thing -- and which number
+    is right (33, or 39 if the discarded `shared` table belongs in it) is a
+    product decision nobody has taken.
+
+    Do not replace this with a plausible-sounding justification. A comment that
+    supplies a reason for a number nobody chose turns an unexamined default into
+    an apparent decision, and then the decision never gets taken (lesson 427).
+    The open question is recorded under "Gaps carried past the archive" in
+    specs/archive/TOOL-036-platform-manifest-sync/tasks.md.
     """
     if "total_services" in config.get("apps", {}).get("platform", {}):
         return int(config["apps"]["platform"]["total_services"])
