@@ -106,7 +106,7 @@ message. A correct alert whose text supplies its own dismissal is worse than a
 wrong one, because the wrong one eventually gets investigated.
 
 Related, and deliberately not the same as
-[lesson-428](../process-method/lesson-428-a-check-that-reported-on-a-frame-nobody-had-stated.md):
+[lesson-428](../process-method/lesson-428-a-sample-is-not-the-population-say-which-frame-you-measured.md):
 there the defect is *inside the check*, which measured a sample and reported a
 property of the population. Here the check was right after #1467 and the reader
 failed. Folding this into that one would widen its claim to "checks can mislead

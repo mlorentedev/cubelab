@@ -1,9 +1,12 @@
 # Metrics, logs, dashboards and alerting
 
-17 lessons, newest first. Back to [all categories](../_index.md).
+20 lessons, newest first. Back to [all categories](../_index.md).
 
 | # | Lesson | Date |
 |---|---|---|
+| 444 | [A drill that asks "is the alert firing?" tests a level when the property under test is an edge — refuse before, rather than mis-attribute after](lesson-444-a-drill-that-asks-is-the-alert-firing-tests-a-level-when-the-property-is-an-edge.md) | 2026-09-04 |
+| 443 | [A range query carries a lookback per point, so "window plus interval" is half the real resolve latency](lesson-443-a-range-query-carries-a-lookback-per-point-so-resolve-latency-is-not-window-plus-interval.md) | 2026-09-04 |
+| 442 | [Removing a rule's provisioning file is not deleting the rule — Grafana keeps evaluating it, and every repo-side signal says it is gone](lesson-442-removing-a-rules-provisioning-file-does-not-delete-the-rule.md) | 2026-09-03 |
 | 429 | [A verification that creates a condition has no natural end](lesson-429-the-state-that-was-evidence-became-residue-with-no-event.md) | 2026-09-04 |
 | 412 | [An alert on a capability the system does not have fires always or never, and fixing its query only picks which](lesson-412-an-alert-on-a-capability-that-does-not-exist.md) | 2026-09-01 |
 | 386 | [A channel with a permanent false positive is not a channel anyone reads](lesson-386-the-alert-that-was-never-true-and-the-one-nobody-read.md) | 2026-08-24 |

@@ -8,7 +8,7 @@ related:
   - adr-055-semver-everywhere-delivery
   - adr-046-gitops-delivery-promotion-strategy
   - adr-053-platform-product-repos
-  - adr-027-config-drift-gate
+  - adr-027-generated-code-drift-detection
 issue: "mlorentedev/kubelab#679"   # ARGO artifact-parity
 ---
 
@@ -94,5 +94,5 @@ The CalVer "Global Release Bundle" (`ci-release.yml`) divergence from release-pl
 
 - [ADR-055](ADR-055-semver-everywhere-delivery.md) (`web` repo) — the pattern this extends; verified `kubelab-web:1.2.0` == `:sha-60b24e7`.
 - [adr-046-gitops-delivery-promotion-strategy](adr-046-gitops-delivery-promotion-strategy.md) — D2 (two immutable lanes) refined here.
-- [adr-027-config-drift-gate](adr-027-config-drift-gate.md) — guarantees overlays == generator output; the re-tag flows through the same SSOT.
+- [adr-027-generated-code-drift-detection](adr-027-generated-code-drift-detection.md) — guarantees overlays == generator output; the re-tag flows through the same SSOT.
 - kubelab#679 (artifact parity), #666 (the CrashLoop incident), #678 (ARGO-016 epic), #373 (DELIVERY-001, next level).

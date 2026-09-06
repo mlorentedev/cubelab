@@ -6,7 +6,7 @@ created: "2026-06-14"
 tags: [architecture, gitops, argocd, environment-promotion, ci-cd, versioning, stream-c]
 related:
   - adr-037-environment-promotion-strategy
-  - adr-027-config-drift-gate
+  - adr-027-generated-code-drift-detection
   - adr-023-hub-spoke-multicloud-gitops
   - adr-030-self-hosted-runner
 issue: "mlorentedev/knowledge#94"   # ARGO-016 epic
@@ -117,7 +117,7 @@ The canonical PR workflow for K8s changes (ADR-037 §Validation) is unchanged: v
 ## References
 
 - [adr-037-environment-promotion-strategy](adr-037-environment-promotion-strategy.md) — supersedes its Pattern D mechanism; reaffirms Pattern A rejection + conditional selfHeal.
-- [adr-027-config-drift-gate](adr-027-config-drift-gate.md) — guarantees generated overlays == generator output (anti-tamper for D5).
+- [adr-027-generated-code-drift-detection](adr-027-generated-code-drift-detection.md) — guarantees generated overlays == generator output (anti-tamper for D5).
 - Lessons `docs/lessons.md`: 2026-03-16 "Mutable tags (:dev) require imagePullPolicy Always"; 2026-03-22 "Kustomize images section doesn't cover custom apps automatically".
 - 2026-06-14 reference audit (4 image-promotion approaches) and GitOps branching consensus: [Octopus — Stop Using Branches](https://octopus.com/blog/stop-using-branches-deploying-different-gitops-environments), [Codefresh — Model GitOps Environments](https://codefresh.io/blog/how-to-model-your-gitops-environments-and-promote-releases-between-them/), [Cloudogu — Promotion Patterns](https://platform.cloudogu.com/en/blog/gitops-repository-patterns-part-4-promotion-patterns/), [OpenGitOps](https://opengitops.dev/).
 - ARGO-014 (descoped) — `argocd-image-updater` follow-up, revisit trigger: need to auto-discover images not built by our CI.
