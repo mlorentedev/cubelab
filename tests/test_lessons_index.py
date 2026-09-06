@@ -23,9 +23,10 @@ earliest a single tree contains both.
 
 from __future__ import annotations
 
-import collections
 import pathlib
 import re
+
+from toolkit.features.lessons_index import LESSON_NAME, number_collisions
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 LESSONS = REPO / "docs/lessons"
@@ -33,12 +34,6 @@ LESSONS = REPO / "docs/lessons"
 
 def _lesson_files() -> list[pathlib.Path]:
     return sorted(LESSONS.glob("*/lesson-*.md"))
-
-
-def _number(path: pathlib.Path) -> str:
-    match = re.match(r"lesson-(\d+)-", path.name)
-    assert match, f"{path.name} does not start with `lesson-NNN-`"
-    return match.group(1)
 
 
 def test_the_scan_finds_the_corpus() -> None:
@@ -50,13 +45,31 @@ def test_the_scan_finds_the_corpus() -> None:
     )
 
 
-def test_no_two_lessons_share_a_number() -> None:
-    """A lesson number is a citation. Two documents cannot answer to one."""
-    by_number: dict[str, list[str]] = collections.defaultdict(list)
-    for path in _lesson_files():
-        by_number[_number(path)].append(f"{path.parent.name}/{path.name}")
+def test_every_lesson_filename_parses() -> None:
+    """The predicate below skips a name it cannot parse, so nothing may be unparseable.
 
-    collisions = {n: paths for n, paths in by_number.items() if len(paths) > 1}
+    `number_collisions` matches `LESSON_NAME` and moves on when a name does not
+    fit, which is right for a function answering only about collisions — and it
+    means a malformed filename would be excluded from the collision scan rather
+    than reported by it. This is the anti-vacuity check for that skip: it asserts
+    the set the predicate actually examines is the whole corpus.
+    """
+    unparseable = [f"{p.parent.name}/{p.name}" for p in _lesson_files() if not LESSON_NAME.match(p.name)]
+    assert not unparseable, "these files are in the corpus but not scanned for collisions:\n  " + "\n  ".join(
+        unparseable
+    )
+
+
+def test_no_two_lessons_share_a_number() -> None:
+    """A lesson number is a citation. Two documents cannot answer to one.
+
+    The predicate is IMPORTED from `toolkit.features.lessons_index`, not copied:
+    the local pre-commit/pre-push gate refuses on the same function (#1678 AC5),
+    and two implementations of one rule is how the local gate and CI come to
+    disagree about what a collision is. One of them would then be wrong, silently,
+    and the copy is always the one nobody updates.
+    """
+    collisions = number_collisions(LESSONS)
     assert not collisions, (
         "two lessons claim the same number:\n"
         + "\n".join(f"  {n}: {sorted(paths)}" for n, paths in sorted(collisions.items()))

@@ -368,6 +368,10 @@ def lessons_index(
         bool,
         typer.Option("--fix/--check", help="Rewrite the counters, or only report what disagrees"),
     ] = False,
+    allow_removal: Annotated[
+        bool,
+        typer.Option("--allow-removal", help="A lesson committed at HEAD is meant to be gone from the tree"),
+    ] = False,
 ) -> None:
     """Derive the lesson index counters from the files on disk.
 
@@ -377,8 +381,35 @@ def lessons_index(
     (#1649). Deriving them at author time is not enough; that is what failed.
 
     Run with --fix from the pre-commit hook, --check from anywhere.
+
+    Exit codes, because the hooks branch on them and a caller must be able to
+    tell the three failures apart (#1678 AC5):
+
+      0  the corpus is safe to count and the counters agree
+      1  the counters disagree (--check), or were rewritten (--fix)
+      2  a HAZARD: recounting is the wrong operation and nothing was written
+      3  CANNOT CHECK: the question went unanswered, which is not a pass
     """
     from toolkit.features import lessons_index as index
+
+    # Hazards first. `--fix` over a colliding or shrunken corpus produces a
+    # correct counter and a broken corpus, and then reports success — the exact
+    # trap #1678 AC5 names. Refusing has to happen before anything is written.
+    try:
+        found = index.hazards(root, allow_removal=allow_removal)
+    except index.CannotCheck as exc:
+        logger.error(f"{root}: CANNOT CHECK — {exc}")
+        logger.error("This is not 'no problems found'. The corpus was not examined.")
+        raise typer.Exit(3) from exc
+
+    if found:
+        for hazard in found:
+            logger.error(str(hazard))
+        logger.error(
+            f"{root}: refusing to touch the counters — {len(found)} hazard(s). "
+            "Recounting here would make the total agree and leave the defect in place."
+        )
+        raise typer.Exit(2)
 
     fixes = index.reconcile(root, apply=fix)
 
