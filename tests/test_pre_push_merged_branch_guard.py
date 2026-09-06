@@ -170,3 +170,53 @@ def test_gh_not_installed_warns_and_allows() -> None:
     assert result.returncode == 0
     assert "WARN" in result.stdout
     assert "gh not installed" in result.stdout
+
+
+# --- the counter guard's preflight: "cannot run" is not "stale counter" ---------
+
+
+def _preflight_source() -> str:
+    """The preflight block, lifted out of the hook the same way as the guard."""
+    text = HOOK.read_text(encoding="utf-8")
+    start = text.index("toolkit_can_run() {")
+    end = text.index("\nfi\n", start) + len("\nfi\n")
+    return text[start:end]
+
+
+def _fake_poetry(tmp_path: Path, body: str) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    poetry = bin_dir / "poetry"
+    poetry.write_text(f"#!{BASH}\n{body}\n")
+    poetry.chmod(poetry.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return bin_dir
+
+
+def _run_preflight(bin_dir: Path) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    env["PATH"] = str(bin_dir)
+    return subprocess.run(
+        [BASH, "-c", _preflight_source()], capture_output=True, text=True, env=env
+    )
+
+
+def test_an_uninstalled_toolkit_is_reported_as_unchecked_not_as_stale(tmp_path: Path) -> None:
+    """The traceback exit code is 1, the checker's code for a stale counter.
+
+    Before the preflight the hook printed the --fix remedy for counters that
+    were correct (2026-09-06, canon-refresh worktree with no venv).
+    """
+    result = _run_preflight(_fake_poetry(tmp_path, "exit 1"))
+
+    assert result.returncode == 1
+    assert "cannot be imported" in result.stdout
+    assert "NOT checked" in result.stdout
+    assert "counters disagree" not in result.stdout
+    assert "--fix" in result.stdout and "Do NOT run --fix" in result.stdout
+
+
+def test_an_importable_toolkit_passes_the_preflight(tmp_path: Path) -> None:
+    result = _run_preflight(_fake_poetry(tmp_path, "exit 0"))
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
