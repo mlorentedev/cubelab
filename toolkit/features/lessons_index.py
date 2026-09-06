@@ -186,6 +186,23 @@ def number_collisions(root: pathlib.Path) -> dict[str, list[str]]:
     return {n: sorted(paths) for n, paths in sorted(by_number.items()) if len(paths) > 1}
 
 
+def relative_posix(path: pathlib.PurePath, root: pathlib.PurePath) -> str:
+    """`path` relative to `root`, always with `/` separators.
+
+    The two sides of the removal comparison come from different worlds: one from
+    `git ls-tree`, which emits `/` on every platform, and one from the
+    filesystem, where `str(WindowsPath(...))` emits `\\`. Comparing them raw
+    makes the sets disjoint on Windows, so EVERY committed lesson reads as
+    removed and the gate refuses every push -- a false positive that the Linux
+    CI cannot see and that lands only on the ADR-052 Windows workstation.
+
+    Found by review on #1714, not by a test. Which is the point of the test that
+    now covers it: it builds a `PureWindowsPath` explicitly, so the assertion is
+    about separators rather than about the platform running it.
+    """
+    return path.relative_to(root).as_posix()
+
+
 def _committed_lesson_files(root: pathlib.Path) -> set[str]:
     """Lesson paths present at HEAD, relative to `root`.
 
@@ -223,16 +240,16 @@ def removed_lessons(root: pathlib.Path) -> list[str]:
     the arrival of a new file, because that is what a renumber actually is.
     """
     committed = _committed_lesson_files(root)
-    on_disk = {str(p.relative_to(root)) for p in all_lesson_files(root)}
+    on_disk = {relative_posix(p, root) for p in all_lesson_files(root)}
     arrived_slugs = {
         m.group("slug")
         for p in all_lesson_files(root)
-        if str(p.relative_to(root)) not in committed and (m := LESSON_NAME.match(p.name))
+        if relative_posix(p, root) not in committed and (m := LESSON_NAME.match(p.name))
     }
 
     gone = []
     for rel in sorted(committed - on_disk):
-        m = LESSON_NAME.match(pathlib.Path(rel).name)
+        m = LESSON_NAME.match(pathlib.PurePosixPath(rel).name)
         if m and m.group("slug") in arrived_slugs:
             continue  # renumbered, not removed
         gone.append(rel)

@@ -119,13 +119,24 @@ if [ "$lessons_rc" -ne 0 ]; then
     echo "        the counters — git merges that line as text and raises no conflict."
     echo ""
     echo "          toolkit tools lessons-index --fix && git commit -a --amend --no-edit"
-  else
+  elif [ "$lessons_rc" -eq 2 ]; then
     echo "[ERROR] The lesson corpus is not in a state where the counters mean anything."
     echo ""
     echo "        The remedy is the one printed above, which is specific to what was"
     echo "        found. Do NOT reach for --fix here: it would make the counters agree"
     echo "        and leave the defect in place, which is the trap this guard exists"
     echo "        to close. See #1678 AC5."
+  else
+    # Exit 3 gets its own words because exit 2 prints a per-hazard remedy and
+    # this does not -- it prints only why the question went unanswered. Pointing
+    # the operator at "the remedy above" when no remedy was printed sends them
+    # looking for text that is not there.
+    echo "[ERROR] The lesson corpus could not be checked, and that is not a pass."
+    echo ""
+    echo "        The reason is printed above; nothing about the corpus has been"
+    echo "        verified either way. Make the question answerable (git on PATH, run"
+    echo "        from inside the repository) and push again. --fix is not the answer"
+    echo "        here either: it would write counters nobody has checked."
   fi
   echo ""
   exit 1

@@ -479,6 +479,33 @@ class TestAnUnanswerableQuestionIsNotAPass:
             lessons_index.hazards(lessons)
 
 
+class TestTheTwoSidesOfTheComparisonUseTheSameSeparator:
+    """Raised in review on #1714, and a false positive Linux CI cannot see.
+
+    `git ls-tree` emits `/` on every platform; `str(WindowsPath(...))` emits
+    `\\`. Compared raw, the two sets are disjoint on Windows, so every committed
+    lesson reads as removed and the gate refuses every push — on the ADR-052
+    Windows workstation only.
+    """
+
+    def test_a_windows_path_still_yields_a_posix_relative_path(self) -> None:
+        """Built from `PureWindowsPath` explicitly, so this asserts something
+        about separators rather than about the platform running the test. On a
+        raw `str(p.relative_to(root))` it fails here, on Linux."""
+        root = pathlib.PureWindowsPath(r"C:\repo\docs\lessons")
+        path = pathlib.PureWindowsPath(r"C:\repo\docs\lessons\alpha\lesson-1-one.md")
+        assert lessons_index.relative_posix(path, root) == "alpha/lesson-1-one.md"
+
+    def test_it_matches_what_git_prints(self, tmp_path: pathlib.Path) -> None:
+        """The other half: the disk side must equal the git side for an unchanged
+        corpus, or `committed - on_disk` is every lesson in the repository."""
+        lessons = _repo_with_lessons(tmp_path, {"alpha": ["lesson-1-one.md", "lesson-2-two.md"]})
+        committed = lessons_index._committed_lesson_files(lessons)
+        on_disk = {lessons_index.relative_posix(p, lessons) for p in lessons_index.all_lesson_files(lessons)}
+        assert committed == on_disk
+        assert lessons_index.removed_lessons(lessons) == []
+
+
 class TestTheHookTellsTheFailuresApart:
     """The hint is half the defect: `--fix` is the wrong remedy for a hazard."""
 
@@ -486,6 +513,14 @@ class TestTheHookTellsTheFailuresApart:
         script = PRE_PUSH.read_text(encoding="utf-8")
         assert "lessons_rc" in script, "the hook still only tests success/failure"
         assert 'if [ "$lessons_rc" -eq 1 ]' in script, "the --fix hint is not gated on exit 1"
+
+    def test_cannot_check_does_not_point_at_a_remedy_nobody_printed(self) -> None:
+        """Raised in review on #1714. Exit 2 prints a per-hazard remedy; exit 3
+        prints only the reason, so telling that operator to follow "the remedy
+        above" sends them looking for text that is not there."""
+        script = PRE_PUSH.read_text(encoding="utf-8")
+        assert 'elif [ "$lessons_rc" -eq 2 ]' in script, "exit 2 and exit 3 still share one branch"
+        assert "could not be checked, and that is not a pass" in script, "exit 3 has no words of its own"
 
     def test_the_fix_hint_is_not_printed_for_every_failure(self) -> None:
         """Reading the script's shape, because the trap is textual: the hint sat
