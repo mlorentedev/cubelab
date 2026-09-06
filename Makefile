@@ -1538,13 +1538,23 @@ apply-middleware-secrets:
 	@test -n "$(filter $(ENV),staging prod)" || (echo "Usage: make apply-middleware-secrets ENV=staging|prod" && exit 1)
 	@$(TOOLKIT) infra k8s apply-middleware-secrets --env $(ENV)
 
-# Reconstructs the n8n notify-router workflow + Header Auth credential from
+# Reconstructs every registered n8n workflow + its Header Auth credential from
 # Git (workflow JSON) + SOPS (webhook_secret) — TOOL-009. Idempotent upsert via
 # fixed ids in the workflow JSON. Secret reaches the pod via /dev/shm only.
-# Auto-runs as the last step of deploy-k8s; staging-only today (no-op elsewhere).
+# Auto-runs as the last step of deploy-k8s.
+#
+# THE FILTER SET IS THE CATALOG'S, NOT THIS LINE'S OPINION. Every spec in
+# `N8N_IMPORT_CATALOG` declares `envs={staging, prod}` and the CLI refuses only
+# `dev`, so `staging` alone made this wrapper narrower than the thing it wraps —
+# `make import-n8n ENV=prod` printed a usage line for a run that is supported and
+# implemented. That was a regression from #1672, which correctly replaced a
+# vacuous `test -n "$(ENV)"` here but took the ENVS from the usage STRING
+# ("Usage: ... ENV=staging") rather than from the catalog. Read a help text as a
+# specification and the guard inherits whatever the help text was stale about.
+# `test_import_n8n_accepts_every_env_its_catalog_declares` derives the floor.
 .PHONY: import-n8n
 import-n8n:
-	@test -n "$(filter $(ENV),staging)" || (echo "Usage: make import-n8n ENV=staging" && exit 1)
+	@test -n "$(filter $(ENV),staging prod)" || (echo "Usage: make import-n8n ENV=staging|prod" && exit 1)
 	@$(TOOLKIT) infra n8n import --env $(ENV)
 
 # End-to-end smoke of the notification fabric (NOTIFY-001): POSTs page + log
