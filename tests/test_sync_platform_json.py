@@ -509,3 +509,23 @@ apps: {}
 
         # The outermost guard too: `apps.services` itself replaced by a scalar.
         assert platform_manifest._collect_ssot_services({"apps": {"services": "oops"}}) == {}
+
+    def test_sync_catches_validation_error_and_returns_failure(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Verify sync() catches ValueError (e.g. Zero-Addressing violation) and returns 1 cleanly."""
+        target_file = tmp_path / "platform.json"
+        monkeypatch.setattr(
+            platform_manifest,
+            "generate_manifest",
+            lambda **_: (_ for _ in ()).throw(ValueError("Zero-Addressing violation: IPv4 address detected")),
+        )
+        rc = platform_manifest.sync(output_path=target_file, check=False)
+        assert rc == 1
+
+    def test_sync_catches_missing_config_and_returns_failure(self, tmp_path: Path) -> None:
+        """Verify sync() catches FileNotFoundError when source configuration does not exist and returns 1 cleanly."""
+        target_file = tmp_path / "platform.json"
+        missing_cfg = tmp_path / "does_not_exist.yaml"
+        rc = platform_manifest.sync(output_path=target_file, check=False, config_path=missing_cfg)
+        assert rc == 1

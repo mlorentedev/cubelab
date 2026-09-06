@@ -853,8 +853,9 @@ def compute_total_services(config: dict[str, Any]) -> int:
 
     from toolkit.scripts.sync_homepage_config import build_service_tables
 
+    legacy_workload_offset = 2
     stg, prd, _ = build_service_tables(config)
-    return len(stg) + len(prd) + 2
+    return len(stg) + len(prd) + legacy_workload_offset
 
 
 def generate_manifest(config_path: Path | None = None, target_path: Path | None = None) -> dict[str, Any]:
@@ -942,7 +943,11 @@ def sync(output_path: Path | None = None, check: bool = False, config_path: Path
         0 on success or match, 1 on failure or drift.
     """
     target = output_path or DEFAULT_OUTPUT
-    manifest = generate_manifest(config_path=config_path, target_path=target)
+    try:
+        manifest = generate_manifest(config_path=config_path, target_path=target)
+    except (ValueError, FileNotFoundError) as e:
+        logger.error(f"Failed to generate platform manifest: {e}")
+        return 1
     content = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
 
     if check:
