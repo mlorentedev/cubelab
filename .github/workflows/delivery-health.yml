@@ -1,0 +1,80 @@
+---
+name: Delivery Health
+
+# #1682 — #1666's AC3. Reads the one conclusion that reports itself nowhere.
+#
+# A `startup_failure` creates no job. No job means no check run, which means no
+# annotation and nothing red on any commit or pull request. `staging-deploy.yml`
+# failed that way SIXTEEN times out of sixteen between 2026-06-18 and
+# 2026-08-25, `apps/api/**` reached staging exactly never in those ten weeks,
+# and five green pipeline jobs said nothing about it. Measured on run
+# 32815342422: `check-suites/<id>/check-runs` = 0, `commits/<sha>/check-runs`
+# = 0. GitHub's explanation exists ONLY in the web UI.
+#
+# What IS reachable is the verdict, on `GET /actions/workflows/<file>/runs`.
+# Nothing read it. This does.
+#
+# Deliberately NOT "alert on any failed run": an ordinary red run already
+# reports itself through checks, and a second channel for it would be noise
+# that trains everyone to ignore this one.
+#
+# The watched set is DERIVED from the workflow tree, not listed here — see
+# `toolkit/features/delivery_health.py` and `tests/test_delivery_health.py`,
+# which asserts the derivation returns exactly today's lanes. A hand-written
+# list would be the same silence one level up: the omission nobody notices.
+#
+# This file is in its own watched set (`delivery_health.SELF`). A checker blind
+# to its own startup_failure reproduces the defect it closes. It resolves
+# itself in CI without a special case: when this workflow runs, that execution
+# IS a run of it, reported `conclusion: null` while in progress, which the
+# checker reads as "not a verdict" rather than as failure.
+
+on:
+  schedule:
+    # 07:00 UTC daily. After the nightly drift gate at 06:00, so a morning check
+    # of Actions shows both verdicts together.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+# Read-only. Note what is NOT here: `security-events`, `contents: write`,
+# `pull-requests`. A caller's `permissions:` block is a ceiling — every scope it
+# does not name is `none` — and this workflow calls nothing and writes nothing,
+# so the ceiling is exactly what it needs. That relation is what #1666 got
+# wrong, and `tests/test_reusable_workflow_permission_ceiling.py` now asserts it
+# for every caller.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: delivery-health
+  cancel-in-progress: true
+
+jobs:
+  startup-visibility:
+    name: Delivery lanes started
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install the toolkit
+        run: |
+          pipx install poetry
+          poetry install --only main --no-interaction
+
+      # Every `${{ }}` value reaches the shell through `env:`, never inline.
+      # Neither is attacker-controlled here — this workflow has no event payload,
+      # only `schedule` and `workflow_dispatch` — but an inline expansion is a
+      # habit that stops being safe the day someone adds a trigger that carries
+      # one, and that edit would not look dangerous.
+      - name: Read every delivery lane's newest run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ${{ github.repository }}
+        run: poetry run toolkit tools delivery-health --repo "$TARGET_REPO"

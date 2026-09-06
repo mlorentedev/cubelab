@@ -4,7 +4,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -395,3 +395,93 @@ def lessons_index(
 
     logger.error(f"{root}: {len(fixes)} counter(s) disagree with the files — run with --fix")
     raise typer.Exit(1)
+
+
+# =============================================================================
+# DELIVERY LANE STARTUP VISIBILITY (#1682)
+# =============================================================================
+
+
+@app.command("delivery-health")
+def delivery_health(
+    repo: Annotated[str, typer.Option("--repo", help="owner/name of the repository to query")],
+    before: Annotated[
+        str | None,
+        typer.Option(
+            "--before",
+            help="Only consider runs created before this ISO-8601 instant. Lets the "
+            "check be pointed at history that has since been fixed, which is how "
+            "its own negative case is verified without a fixture.",
+        ),
+    ] = None,
+    workflows_dir: Annotated[Path, typer.Option("--workflows-dir", help="Where the workflow files live")] = Path(
+        ".github/workflows"
+    ),
+) -> None:
+    """Refuse a delivery workflow whose newest run never started.
+
+    A `startup_failure` creates no job, so it creates no check run, so nothing
+    goes red anywhere. `staging-deploy.yml` failed that way sixteen times out of
+    sixteen over ten weeks while every pipeline anyone looked at was green
+    (#1666). The conclusion is readable; nothing read it.
+
+    Exits 0 when every watched lane's newest run started, 1 when one did not or
+    has never run at all, and 2 when the question could not be answered. Two is
+    never collapsed into zero: an unreadable answer delivered as "fine" is
+    precisely the defect this closes.
+    """
+    import yaml
+
+    from toolkit.features import delivery_health as health
+
+    # `dict[Any, Any]`, not `dict[str, Any]`: PyYAML folds the unquoted key `on`
+    # to the boolean True, so a parsed workflow really does have a non-string
+    # key. See `delivery_health.triggers`.
+    def load(path: Path) -> dict[Any, Any] | None:
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            return None
+        return loaded if isinstance(loaded, dict) else None
+
+    def resolve(uses: str) -> dict[Any, Any] | None:
+        if not uses.startswith("./"):
+            return None
+        called = Path(uses[2:])
+        return load(called) if called.exists() else None
+
+    try:
+        names = health.watched(load, sorted(workflows_dir.glob("*.y*ml")), resolve)
+    except OSError as exc:
+        logger.error(f"delivery health: cannot read {workflows_dir}: {exc}")
+        raise typer.Exit(2) from exc
+
+    if not names:
+        logger.error(
+            f"delivery health: no watched workflow derived from {workflows_dir}. "
+            "That is not a clean result — the scan found nothing to ask about."
+        )
+        raise typer.Exit(2)
+
+    verdicts = []
+    try:
+        for name in names:
+            verdicts.append(health.classify(name, health.fetch_runs(repo, name, before)))
+    except health.WorkflowError as exc:
+        logger.error(f"delivery health: {exc}")
+        logger.error("Cannot determine whether these lanes start, so they are NOT treated as healthy.")
+        raise typer.Exit(2) from exc
+
+    for v in verdicts:
+        (logger.success if v.ok else logger.error)(f"{v.workflow}: {v.state} — {v.detail}")
+
+    code = health.worst(verdicts)
+    if code == 0:
+        logger.success(f"all {len(verdicts)} delivery lanes started on their newest run")
+    else:
+        logger.error(
+            "A lane above never started. Nothing else reports this: a startup_failure "
+            "produces no job, no check run and no annotation, and GitHub's reason for "
+            "it exists only in the web UI. Open the run's page to read it."
+        )
+    raise typer.Exit(code)
