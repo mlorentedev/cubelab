@@ -111,25 +111,19 @@ class TestPlatformManifestGeneration:
         # Private services must not leak URLs
         for service in manifest["services"]:
             if not service.get("isPublic", False):
-                assert (
-                    service.get("url") is None
-                ), f"Private service {service['slug']} leaked URL: {service.get('url')}"
-                assert (
-                    service.get("healthEndpoint") is None
-                ), f"Private service {service['slug']} leaked healthEndpoint"
+                assert service.get("url") is None, f"Private service {service['slug']} leaked URL: {service.get('url')}"
+                assert service.get("healthEndpoint") is None, f"Private service {service['slug']} leaked healthEndpoint"
             else:
-                assert (
-                    service.get("url") is not None
-                ), f"Public service {service['slug']} missing public URL"
+                assert service.get("url") is not None, f"Public service {service['slug']} missing public URL"
 
     def test_provenance_determinism(self) -> None:
         manifest = platform_manifest.generate_manifest()
-        assert re.match(
-            r"^[a-f0-9]{40}$", manifest["source_commit"]
-        ), f"Invalid commit sha: {manifest['source_commit']}"
-        assert re.match(
-            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", manifest["generated_at"]
-        ), f"Invalid ISO 8601 date: {manifest['generated_at']}"
+        assert re.match(r"^[a-f0-9]{40}$", manifest["source_commit"]), (
+            f"Invalid commit sha: {manifest['source_commit']}"
+        )
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", manifest["generated_at"]), (
+            f"Invalid ISO 8601 date: {manifest['generated_at']}"
+        )
 
 
 class TestPlatformManifestDriftGate:
@@ -160,17 +154,17 @@ class TestPlatformManifestEdgeCases:
         with pytest.raises(FileNotFoundError, match="Configuration file not found"):
             platform_manifest.generate_manifest(config_path=missing)
 
-    def test_git_failure_falls_back_gracefully(self, monkeypatch, tmp_path: Path) -> None:
+    def test_provenance_content_hash(self, tmp_path: Path) -> None:
         fake_cfg = tmp_path / "common.yaml"
         fake_cfg.write_text("k3s: {version: 'v1.34.4'}\n", encoding="utf-8")
 
-        def mock_check_output(*args: Any, **kwargs: Any) -> str:
-            raise RuntimeError("git failed")
+        source_hash = platform_manifest.compute_source_hash(fake_cfg)
+        assert len(source_hash) == 40
+        assert re.match(r"^[0-9a-f]{40}$", source_hash)
 
-        monkeypatch.setattr("subprocess.check_output", mock_check_output)
-        ts, sha = platform_manifest._get_commit_provenance(fake_cfg)
-        assert sha == "0000000000000000000000000000000000000000"
-        assert re.match(r"^\d{4}-\d{2}-\d{2}T", ts)
+        ts, sha = platform_manifest._get_provenance(fake_cfg)
+        assert sha == source_hash
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", ts)
 
     def test_zero_addressing_guard_catches_leaked_ip(self, monkeypatch) -> None:
         mutated_services = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
@@ -304,3 +298,84 @@ apps:
         missing = tmp_path / "does_not_exist.json"
         rc = platform_manifest.sync(output_path=missing, check=True)
         assert rc == 1
+
+    def test_drift_gate_across_simulated_commit_boundary(self, tmp_path: Path) -> None:
+        mock_yaml = tmp_path / "common.yaml"
+        mock_yaml.write_text("k3s: {version: 'v1.34.4'}\napps: {}\n", encoding="utf-8")
+        target_json = tmp_path / "platform.json"
+
+        # 1. First sync generates manifest
+        rc_sync = platform_manifest.sync(output_path=target_json, check=False, config_path=mock_yaml)
+        assert rc_sync == 0
+        assert target_json.exists()
+
+        initial_content = target_json.read_text(encoding="utf-8")
+        initial_data = json.loads(initial_content)
+        assert len(initial_data["source_commit"]) == 40
+
+        # 2. Drift check passes before commit
+        assert platform_manifest.sync(output_path=target_json, check=True, config_path=mock_yaml) == 0
+
+        # 3. Simulate git commit boundary: files are committed, content of SSOT is unchanged
+        # Drift check must STILL pass bit-for-bit (Finding 1 fix)
+        assert platform_manifest.sync(output_path=target_json, check=True, config_path=mock_yaml) == 0
+        assert target_json.read_text(encoding="utf-8") == initial_content
+
+        # 4. Modify SSOT file
+        mock_yaml.write_text("k3s: {version: 'v1.35.0'}\napps: {}\n", encoding="utf-8")
+
+        # 5. Drift check must now fail
+        assert platform_manifest.sync(output_path=target_json, check=True, config_path=mock_yaml) == 1
+
+        # 6. Re-sync updates the manifest and drift check passes again
+        assert platform_manifest.sync(output_path=target_json, check=False, config_path=mock_yaml) == 0
+        assert platform_manifest.sync(output_path=target_json, check=True, config_path=mock_yaml) == 0
+
+    def test_compute_total_services_calculation(self) -> None:
+        # Explicit override in config
+        override_cfg = {"apps": {"platform": {"total_services": 42}}}
+        assert platform_manifest.compute_total_services(override_cfg) == 42
+
+        # Direct calculation from empty config
+        count = platform_manifest.compute_total_services({})
+        assert count == 35
+
+    def test_dynamic_public_service_from_ssot(self, tmp_path: Path) -> None:
+        mock_yaml = tmp_path / "common.yaml"
+        mock_yaml.write_text(
+            """
+apps:
+  services:
+    custom_cat:
+      new_service:
+        name: "New Public Tool"
+        domain: "tool.kubelab.live"
+        health_path: "/health"
+        public: true
+""",
+            encoding="utf-8",
+        )
+        # Add custom service to catalog defaults for projection
+        mutated_catalog = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
+        mutated_catalog.append(
+            {
+                "slug": "new_service",
+                "name": "New Public Tool Default",
+                "category": "Core Gateway",
+                "categoryEs": "Gateway Principal",
+                "description": "Dynamic public tool",
+                "descriptionEs": "Herramienta pública dinámica",
+                "node": "vps",
+                "env": "prod",
+                "tech": ["Go"],
+                "isPublic": False,  # defaults to private, but SSOT declares public: true
+                "status": "operational",
+            }
+        )
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(platform_manifest, "SERVICE_CATALOG_DEFAULTS", mutated_catalog)
+            manifest = platform_manifest.generate_manifest(config_path=mock_yaml)
+            new_svc = next(s for s in manifest["services"] if s["slug"] == "new_service")
+            assert new_svc["isPublic"] is True
+            assert new_svc["url"] == "https://tool.kubelab.live"
+            assert new_svc["healthEndpoint"] == "https://tool.kubelab.live/health"

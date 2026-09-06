@@ -8,9 +8,9 @@ no internal hostnames, no private URLs).
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import re
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -589,25 +589,36 @@ ARCHITECTURE_DIAGRAMS: list[dict[str, Any]] = [
 ]
 
 
-def _get_commit_provenance(file_path: Path) -> tuple[str, str]:
-    """Return deterministic (timestamp, sha) for the file from git log."""
-    try:
-        ts = subprocess.check_output(
-            ["git", "log", "-1", "--format=%cI", str(file_path)],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-        sha = subprocess.check_output(
-            ["git", "log", "-1", "--format=%H", str(file_path)],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-        if ts and sha:
-            return ts, sha
-    except Exception:
-        pass
-    # Fallback if git is unavailable or repo is not yet committed
-    return datetime.now(timezone.utc).isoformat(), "0000000000000000000000000000000000000000"
+def compute_source_hash(file_path: Path) -> str:
+    """Return deterministic git blob SHA-1 hash for the source SSOT file.
+
+    Equivalent to `git hash-object <file>`, pure-python, invariant across
+    commits, clones, shallow depth, and git staging states.
+    """
+    data = file_path.read_bytes()
+    header = f"blob {len(data)}\0".encode()
+    return hashlib.sha1(header + data).hexdigest()
+
+
+def _get_provenance(file_path: Path, target_path: Path | None = None) -> tuple[str, str]:
+    """Return (generated_at, source_hash) provenance for the manifest.
+
+    The source_hash is a pure-python git blob SHA-1 hash of the SSOT file.
+    If target_path exists and already has the matching source_hash, preserves
+    the existing generated_at timestamp to avoid spurious drift during check.
+    Otherwise, generates a new ISO 8601 UTC timestamp.
+    """
+    source_hash = compute_source_hash(file_path)
+    if target_path and target_path.exists():
+        try:
+            existing = json.loads(target_path.read_text(encoding="utf-8"))
+            if existing.get("source_commit") == source_hash and existing.get("generated_at"):
+                return str(existing["generated_at"]), source_hash
+        except Exception:
+            pass
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return ts, source_hash
 
 
 def project_nodes(config: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int, int]:
@@ -717,24 +728,24 @@ def project_services(config: dict[str, Any]) -> list[dict[str, Any]]:
     infra = config.get("infra", {})
     argocd = config.get("argocd", {})
 
-    ssot_service_blocks: dict[str, dict[str, Any]] = {
-        "pollex": services_by_cat.get("ai", {}).get("pollex", {}),
-        "hive": services_by_cat.get("ai", {}).get("hive", {}),
-        "ollama": services_by_cat.get("ai", {}).get("ollama", {}),
-        "kubelab-api": platform_apps.get("api", {}),
-        "traefik": services_by_cat.get("core", {}).get("traefik", {}) or config.get("edge", {}).get("traefik", {}),
-        "headscale": services_by_cat.get("core", {}).get("headscale", {}),
-        "authelia": services_by_cat.get("security", {}).get("authelia", {}),
-        "crowdsec": services_by_cat.get("security", {}).get("crowdsec", {}),
-        "argocd": argocd,
-        "gitea": services_by_cat.get("core", {}).get("gitea", {}),
-        "grafana": services_by_cat.get("observability", {}).get("grafana", {}),
-        "loki": services_by_cat.get("observability", {}).get("loki", {}),
-        "uptime-kuma": services_by_cat.get("observability", {}).get("uptime_kuma", {}),
-        "minio": services_by_cat.get("data", {}).get("minio", {}),
-        "postgresql": infra.get("postgres", {}),
-        "coredns": services_by_cat.get("network", {}).get("coredns", {}),
-    }
+    ssot_service_blocks: dict[str, dict[str, Any]] = {}
+    if isinstance(services_by_cat, dict):
+        for cat_svcs in services_by_cat.values():
+            if isinstance(cat_svcs, dict):
+                for svc_name, svc_cfg in cat_svcs.items():
+                    if isinstance(svc_cfg, dict):
+                        ssot_service_blocks[svc_name] = svc_cfg
+                        ssot_service_blocks[svc_name.replace("_", "-")] = svc_cfg
+
+    # Well-known overlays from platform, infra, argocd, edge
+    if "api" in platform_apps and isinstance(platform_apps["api"], dict):
+        ssot_service_blocks["kubelab-api"] = platform_apps["api"]
+    if isinstance(argocd, dict) and argocd:
+        ssot_service_blocks["argocd"] = argocd
+    if "postgres" in infra and isinstance(infra["postgres"], dict):
+        ssot_service_blocks["postgresql"] = infra["postgres"]
+    if "traefik" not in ssot_service_blocks and "traefik" in config.get("edge", {}):
+        ssot_service_blocks["traefik"] = config["edge"]["traefik"]
 
     projected: list[dict[str, Any]] = []
 
@@ -744,18 +755,15 @@ def project_services(config: dict[str, Any]) -> list[dict[str, Any]]:
 
         domain = svc_cfg.get("domain", "")
         health_path = svc_cfg.get("health_path", "")
-        enable_auth = svc_cfg.get("enable_auth", True)
-        auth_level = svc_cfg.get("auth_level", "")
 
-        is_explicit_public = defaults.get("isPublic") is True
-        is_cfg_public = bool(
-            enable_auth is False
-            and auth_level in ("bypass", None, "")
-            and domain
-            and not domain.endswith(".internal")
-            and slug in ("kubelab-api", "hive", "pollex")
-        )
-        is_public = is_explicit_public or is_cfg_public
+        # Determine public accessibility:
+        # 1. Explicit declaration in common.yaml SSOT (`public: true` or `is_public: true`)
+        # 2. Catalog default if not overridden in SSOT
+        is_ssot_public = svc_cfg.get("public") if "public" in svc_cfg else svc_cfg.get("is_public")
+        if is_ssot_public is not None:
+            is_public = bool(is_ssot_public)
+        else:
+            is_public = defaults.get("isPublic") is True
 
         if is_public:
             url = (f"https://{domain}" if domain else None) or defaults.get("url")
@@ -797,18 +805,14 @@ def compute_total_services(config: dict[str, Any]) -> int:
     """Calculate total services/workloads running across all clusters."""
     if "total_services" in config.get("apps", {}).get("platform", {}):
         return int(config["apps"]["platform"]["total_services"])
-    try:
-        from toolkit.scripts.sync_homepage_config import build_service_tables
 
-        stg, prd, _ = build_service_tables(config)
-        return len(stg) + len(prd) + 2
-    except Exception:
-        apps_services = config.get("apps", {}).get("services", {})
-        count = sum(len(v) for v in apps_services.values() if isinstance(v, dict))
-        return count * 2 + 1 if count else 35
+    from toolkit.scripts.sync_homepage_config import build_service_tables
+
+    stg, prd, _ = build_service_tables(config)
+    return len(stg) + len(prd) + 2
 
 
-def generate_manifest(config_path: Path | None = None) -> dict[str, Any]:
+def generate_manifest(config_path: Path | None = None, target_path: Path | None = None) -> dict[str, Any]:
     """Project common.yaml SSOT into the public platform.json manifest."""
     cfg_file = config_path or COMMON_YAML_PATH
     if not cfg_file.exists():
@@ -817,7 +821,8 @@ def generate_manifest(config_path: Path | None = None) -> dict[str, Any]:
     with open(cfg_file, encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
 
-    generated_at, source_commit = _get_commit_provenance(cfg_file)
+    target = target_path or (DEFAULT_OUTPUT if config_path is None else None)
+    generated_at, source_commit = _get_provenance(cfg_file, target)
 
     # 1. Fleet nodes dynamic projection
     nodes, active_node_count, k8s_clusters, k8s_nodes = project_nodes(config)
@@ -875,18 +880,19 @@ def generate_manifest(config_path: Path | None = None) -> dict[str, Any]:
     return manifest
 
 
-def sync(output_path: Path | None = None, check: bool = False) -> int:
+def sync(output_path: Path | None = None, check: bool = False, config_path: Path | None = None) -> int:
     """Generate or check the platform.json manifest.
 
     Args:
         output_path: Destination path (default: infra/config/platform.json).
         check: If True, exits with 1 on drift instead of writing.
+        config_path: Source configuration path (default: infra/config/values/common.yaml).
 
     Returns:
         0 on success or match, 1 on failure or drift.
     """
     target = output_path or DEFAULT_OUTPUT
-    manifest = generate_manifest()
+    manifest = generate_manifest(config_path=config_path, target_path=target)
     content = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
 
     if check:
