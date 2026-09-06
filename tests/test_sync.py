@@ -149,6 +149,99 @@ class TestRunWithCheck:
         assert _run_with_check([f], sync_fn, "test") is True
         assert f.read_bytes() == b"key: value\n"
 
+    def test_a_drift_report_names_the_lines_not_only_the_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The gate is the only check that runs on Windows, so its output is the whole debugger.
+
+        Measured 2026-09-06: `platform.json` drifted on the Windows runner and
+        passed on Linux, and the job's entire output was the filename. A
+        platform-specific drift is reproducible nowhere a maintainer can attach
+        a debugger, so a report that says only THAT something drifted cannot be
+        acted on at all.
+        """
+        f = tmp_path / "generated.json"
+        f.write_bytes(b'{\n  "total": 33\n}\n')
+
+        def sync_fn() -> int:
+            f.write_bytes(b'{\n  "total": 35\n}\n')
+            return 0
+
+        assert _run_with_check([f], sync_fn, "test") is False
+
+        # The project logger renders through Rich to stdout, not through the
+        # `logging` module, so caplog sees nothing here — capsys is the surface
+        # a CI log actually shows.
+        report = capsys.readouterr().out
+        assert '-  "total": 33' in report, "the committed value is missing from the diff"
+        assert '+  "total": 35' in report, "the generated value is missing from the diff"
+
+    def test_a_difference_the_normalizer_flattens_is_named_as_such(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Bytes differing while normalized text matches is a real state, and an empty diff is not a report.
+
+        `_normalize_content` folds CRLF to LF, so two files can compare unequal
+        upstream of it and identical inside it. Printing nothing there would
+        leave the reader with a drift claim and no evidence.
+        """
+        f = tmp_path / "generated.json"
+        f.write_bytes(b'{"a": 1}\r\n')
+
+        def sync_fn() -> int:
+            f.write_bytes(b'{"a": 1}\n')
+            return 0
+
+        result = _run_with_check([f], sync_fn, "test")
+
+        # The normalizer folds this, so the gate itself must stay green.
+        assert result is True
+        assert "drift detected" not in capsys.readouterr().out
+
+    def test_the_diff_hides_what_the_check_itself_ignores(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A diagnostic that disagrees with its own gate sends people after the wrong line.
+
+        `_run_with_check` compares NORMALIZED bytes, so a value matched by a
+        dynamic pattern is deliberately not drift. If the diff were rendered
+        from the raw content it would show that value as a change — a line the
+        gate had already decided to ignore, printed as the reason it failed.
+        """
+        f = tmp_path / "generated.json"
+        f.write_bytes(b'{\n  "today": "2026-01-01",\n  "total": 33\n}\n')
+
+        def sync_fn() -> int:
+            f.write_bytes(b'{\n  "today": "2026-09-06",\n  "total": 35\n}\n')
+            return 0
+
+        patterns = [(r'"today": "\d{4}-\d{2}-\d{2}"', '"today": "DATE"')]
+        assert _run_with_check([f], sync_fn, "test", dynamic_patterns=patterns) is False
+
+        report = capsys.readouterr().out
+        assert '"total": 35' in report, "the real change is missing from the diff"
+        assert "2026-09-06" not in report, (
+            "the diff shows a value the gate normalizes away — it is rendering raw bytes, "
+            "so it reports as the cause a line that was never the cause"
+        )
+
+    def test_a_wholesale_regeneration_does_not_bury_the_log(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A file regenerated from scratch differs in every line, and an uncapped diff is not a report."""
+        f = tmp_path / "generated.json"
+        f.write_bytes(b"".join(b'"old-%d"\n' % i for i in range(400)))
+
+        def sync_fn() -> int:
+            f.write_bytes(b"".join(b'"new-%d"\n' % i for i in range(400)))
+            return 0
+
+        assert _run_with_check([f], sync_fn, "test") is False
+
+        report = capsys.readouterr().out
+        assert "diff truncated" in report, "an 800-line diff went to the log unbounded"
+        assert report.count("new-") < 400, "the cap did not bound the output"
+
     def test_drift_detected_returns_false(self, tmp_path: Path) -> None:
         f = tmp_path / "config.yaml"
         f.write_bytes(b"key: old_value\n")
