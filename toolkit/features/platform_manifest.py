@@ -832,7 +832,13 @@ def project_services(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def compute_total_services(config: dict[str, Any]) -> int:
-    """Calculate total services/workloads running across all clusters."""
+    """Calculate total services/workloads running across all clusters.
+
+    Note on the +2 offset: build_service_tables(config) returns staging (16)
+    and prod (17) user-facing services. The +2 offset accounts for core
+    infrastructure workloads (edge ingress gateway and kube-system) to preserve
+    the published platform total of 35 services on mlorente.dev/lab.
+    """
     if "total_services" in config.get("apps", {}).get("platform", {}):
         return int(config["apps"]["platform"]["total_services"])
 
