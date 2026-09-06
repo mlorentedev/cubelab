@@ -24,4 +24,6 @@ The same shape has a third instance in this very target, found while fixing the 
 
 **Rule**: A guard on a variable that has a repo-wide default is not a guard, and tightening it to *where the value came from* is not enough either — validate the value against the set the gate can actually check, and declare that set as a variable a test can assert on. More generally: **when a gate can run against a target that cannot exhibit the failure, its green is not evidence.** Ask what the check ran *against*, not whether it passed; `✓ No drift` is a claim about one environment, and the default environment is the one that ships nowhere. In a `git diff`-based gate the specific trap is that a pathspec matching nothing — a wrong env, an untracked file — exits 0, which is indistinguishable from agreement. And before putting a value under `infra.*`, check ADR-036's actual contract: that prefix has a consumer (every ConfigMap), not just a meaning.
 
+**Seen again**: #1672 (2026-09-05) found the same unreachable `test -n "$(ENV)"` guard on eighteen more Make targets, each now filtering against the environments its own usage line offers.
+
 **Tags**: `#makefile` `#drift-gate` `#adr-036` `#ssot` `#false-green` `#ci-gate-002` `#backup-044` `#pr-1118` `#pr-1122`
