@@ -1729,6 +1729,14 @@ lint:
 lint-ansible: ## Parse every Ansible playbook without running it (needs Galaxy collections)
 	@$(TOOLKIT) infra ansible syntax-check
 
+.PHONY: branch-protection-check
+branch-protection-check: ## Report where master's GitHub protection differs from common.yaml
+	@$(TOOLKIT) tools branch-protection --check
+
+.PHONY: branch-protection-apply
+branch-protection-apply: ## Apply ci.branch_protection to GitHub, verified by re-read
+	@$(TOOLKIT) tools branch-protection --apply
+
 .PHONY: type
 type:
 	@$(POETRY) run mypy toolkit
