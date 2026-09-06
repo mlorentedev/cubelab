@@ -195,10 +195,10 @@
       "ram": "2 GB",
       "storage": "—",
       "os": "—",
-      "runtime": "standby",
-      "runtimeRole": "Not running. Rehearsal date not yet recorded.",
+      "location": "Powered down (was eu-central)",
       "status": "standby",
-      "location": "Powered down (was eu-central)"
+      "runtime": "standby",
+      "runtimeRole": "Not running. Rehearsal date not yet recorded."
     }
   ],
   "services": [

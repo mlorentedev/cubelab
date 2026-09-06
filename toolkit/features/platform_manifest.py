@@ -24,8 +24,23 @@ from toolkit.core.logging import logger
 DEFAULT_OUTPUT = settings.project_root / "infra/config/platform.json"
 COMMON_YAML_PATH = settings.project_root / "infra/config/values/common.yaml"
 
-# Canonical node hardware catalog (enriched from common.yaml SSOT)
-NODE_METADATA: dict[str, dict[str, Any]] = {
+# Zero-Addressing leak detection patterns (ADR-056 §3)
+IPV4_REGEX = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+IPV6_REGEX = re.compile(
+    r"(?i)(?<![0-9a-fA-F:])"
+    r"(?:"
+    r"(?:[0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}"
+    r"|(?:[0-9a-fA-F]{1,4}:){1,7}:"
+    r"|:(?::[0-9a-fA-F]{1,4}){1,7}"
+    r"|(?:[0-9a-fA-F]{1,4}:)+:(?:[0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4}"
+    r"|fd[0-9a-fA-F]{2}:[0-9a-fA-F:]+"
+    r")"
+    r"(?![0-9a-fA-F:])"
+)
+INTERNAL_HOST_REGEX = re.compile(r"\b[a-zA-Z0-9.-]+\.(?:internal|local|lan)\b")
+
+# Canonical node hardware catalog defaults (enriched from common.yaml SSOT)
+NODE_CATALOG_DEFAULTS: dict[str, dict[str, Any]] = {
     "vps": {
         "name": "Hetzner Cloud VPS",
         "tier": "cloud",
@@ -218,8 +233,10 @@ NODE_METADATA: dict[str, dict[str, Any]] = {
     },
 }
 
-# Canonical platform services (Zero-Addressing enforced: no private URLs)
-PLATFORM_SERVICES: list[dict[str, Any]] = [
+NODE_METADATA = NODE_CATALOG_DEFAULTS
+
+# Canonical platform services catalog defaults
+SERVICE_CATALOG_DEFAULTS: list[dict[str, Any]] = [
     {
         "slug": "pollex",
         "name": "Pollex Edge AI",
@@ -410,6 +427,8 @@ PLATFORM_SERVICES: list[dict[str, Any]] = [
     },
 ]
 
+PLATFORM_SERVICES = SERVICE_CATALOG_DEFAULTS
+
 # Canonical architecture diagrams (Zero-Addressing enforced: no IP addresses or internal FQDNs)
 ARCHITECTURE_DIAGRAMS: list[dict[str, Any]] = [
     {
@@ -591,6 +610,204 @@ def _get_commit_provenance(file_path: Path) -> tuple[str, str]:
     return datetime.now(timezone.utc).isoformat(), "0000000000000000000000000000000000000000"
 
 
+def project_nodes(config: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int, int]:
+    """Dynamically project fleet nodes from networking and clusters SSOT in common.yaml.
+
+    Returns:
+        tuple of (nodes_list, active_node_count, k8s_clusters_count, k8s_nodes_count)
+    """
+    networking = config.get("networking", {})
+    clusters = config.get("clusters", {})
+
+    discovered_nodes: list[tuple[str, dict[str, Any]]] = []
+    nodes_dict = networking.get("nodes", {}) if isinstance(networking.get("nodes"), dict) else {}
+
+    # 1. Canonical order from catalog defaults, only if declared in networking
+    for node_id in NODE_CATALOG_DEFAULTS:
+        if node_id == "vps" and "vps" in networking and isinstance(networking["vps"], dict):
+            discovered_nodes.append((node_id, networking["vps"]))
+        elif node_id == "gcp1" and "gcp" in networking and isinstance(networking["gcp"], dict):
+            discovered_nodes.append((node_id, networking["gcp"]))
+        elif node_id == "aws1" and "aws" in networking and isinstance(networking["aws"], dict):
+            discovered_nodes.append((node_id, networking["aws"]))
+        elif node_id in nodes_dict and isinstance(nodes_dict[node_id], dict):
+            discovered_nodes.append((node_id, nodes_dict[node_id]))
+
+    # 2. Extra nodes present in networking.nodes not in catalog defaults
+    for node_id, node_cfg in nodes_dict.items():
+        if node_id not in NODE_CATALOG_DEFAULTS and isinstance(node_cfg, dict):
+            discovered_nodes.append((node_id, node_cfg))
+
+    k8s_node_ids: set[str] = set()
+    for c in clusters.values():
+        if isinstance(c, dict) and c.get("node"):
+            k8s_node_ids.add(str(c["node"]))
+
+    projected: list[dict[str, Any]] = []
+    active_count = 0
+
+    for node_id, node_cfg in discovered_nodes:
+        defaults = NODE_CATALOG_DEFAULTS.get(node_id, {})
+        is_retired = bool(node_cfg.get("retired") or node_cfg.get("status") == "standby")
+
+        status = "standby" if is_retired else ("warning" if node_cfg.get("status") == "warning" else "healthy")
+        if status != "standby":
+            active_count += 1
+
+        is_always_on = node_cfg.get("location") == "always-on"
+        is_cloud = is_always_on and (
+            node_id in ("vps", "gcp1", "aws1") or "cloud" in defaults.get("provider", "").lower()
+        )
+        tier = "cloud" if is_cloud else "homelab"
+
+        ansible_groups = node_cfg.get("ansible_groups", [])
+        if is_retired:
+            runtime = "standby"
+        elif node_id in k8s_node_ids or "k3s_cluster" in ansible_groups or node_cfg.get("k3s_version"):
+            runtime = "k3s"
+        elif "dev_node" in ansible_groups or "docker_hosts" in ansible_groups or "forge" in ansible_groups:
+            runtime = "docker"
+        else:
+            runtime = defaults.get("runtime", "systemd")
+
+        if node_id in ("vps", "gcp1"):
+            env = "Production"
+        elif node_id == "ace1":
+            env = "Staging"
+        elif node_id == "jetson":
+            env = "Edge AI"
+        else:
+            env = "Infrastructure"
+
+        entry = {
+            "id": node_id,
+            "name": defaults.get("name") or node_cfg.get("dashboard", {}).get("display_name") or node_id,
+            "tier": tier,
+            "role": defaults.get("role", ""),
+            "roleEs": defaults.get("roleEs", ""),
+            "summary": defaults.get("summary", ""),
+            "summaryEs": defaults.get("summaryEs", ""),
+            "environment": env,
+            "provider": defaults.get("provider", "On-Premises Homelab" if tier == "homelab" else "Cloud"),
+            "arch": defaults.get("arch", "x86_64"),
+            "cpu": defaults.get("cpu", ""),
+            "ram": defaults.get("ram", ""),
+            "storage": defaults.get("storage", ""),
+            "os": defaults.get("os", "Ubuntu 24.04 LTS"),
+            "location": defaults.get("location", "Homelab (USA)" if tier == "homelab" else "Cloud"),
+            "status": status,
+            "runtime": runtime,
+            "runtimeRole": defaults.get("runtimeRole", ""),
+        }
+        projected.append(entry)
+
+    return projected, active_count, len(clusters), len(k8s_node_ids)
+
+
+def project_services(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Dynamically project and sanitize platform services from common.yaml SSOT.
+
+    Enforces Zero-Addressing doctrine (ADR-056 §3):
+    - Public services receive public URL and public health endpoint.
+    - Private / internal services strictly omit 'url' and 'healthEndpoint'.
+    """
+    apps = config.get("apps", {})
+    services_by_cat = apps.get("services", {})
+    platform_apps = apps.get("platform", {})
+    infra = config.get("infra", {})
+    argocd = config.get("argocd", {})
+
+    ssot_service_blocks: dict[str, dict[str, Any]] = {
+        "pollex": services_by_cat.get("ai", {}).get("pollex", {}),
+        "hive": services_by_cat.get("ai", {}).get("hive", {}),
+        "ollama": services_by_cat.get("ai", {}).get("ollama", {}),
+        "kubelab-api": platform_apps.get("api", {}),
+        "traefik": services_by_cat.get("core", {}).get("traefik", {}) or config.get("edge", {}).get("traefik", {}),
+        "headscale": services_by_cat.get("core", {}).get("headscale", {}),
+        "authelia": services_by_cat.get("security", {}).get("authelia", {}),
+        "crowdsec": services_by_cat.get("security", {}).get("crowdsec", {}),
+        "argocd": argocd,
+        "gitea": services_by_cat.get("core", {}).get("gitea", {}),
+        "grafana": services_by_cat.get("observability", {}).get("grafana", {}),
+        "loki": services_by_cat.get("observability", {}).get("loki", {}),
+        "uptime-kuma": services_by_cat.get("observability", {}).get("uptime_kuma", {}),
+        "minio": services_by_cat.get("data", {}).get("minio", {}),
+        "postgresql": infra.get("postgres", {}),
+        "coredns": services_by_cat.get("network", {}).get("coredns", {}),
+    }
+
+    projected: list[dict[str, Any]] = []
+
+    for defaults in SERVICE_CATALOG_DEFAULTS:
+        slug = defaults["slug"]
+        svc_cfg = ssot_service_blocks.get(slug, {})
+
+        domain = svc_cfg.get("domain", "")
+        health_path = svc_cfg.get("health_path", "")
+        enable_auth = svc_cfg.get("enable_auth", True)
+        auth_level = svc_cfg.get("auth_level", "")
+
+        is_explicit_public = defaults.get("isPublic") is True
+        is_cfg_public = bool(
+            enable_auth is False
+            and auth_level in ("bypass", None, "")
+            and domain
+            and not domain.endswith(".internal")
+            and slug in ("kubelab-api", "hive", "pollex")
+        )
+        is_public = is_explicit_public or is_cfg_public
+
+        if is_public:
+            url = (f"https://{domain}" if domain else None) or defaults.get("url")
+            health_endpoint = (f"https://{domain}{health_path}" if domain and health_path else None) or defaults.get(
+                "healthEndpoint"
+            )
+        else:
+            url = None
+            health_endpoint = None
+
+        entry: dict[str, Any] = {
+            "slug": slug,
+            "name": defaults.get("name") or svc_cfg.get("name") or slug,
+            "category": defaults["category"],
+            "categoryEs": defaults["categoryEs"],
+            "description": defaults["description"],
+            "descriptionEs": defaults["descriptionEs"],
+        }
+        if url is not None:
+            entry["url"] = url
+        if health_endpoint is not None:
+            entry["healthEndpoint"] = health_endpoint
+        entry.update(
+            {
+                "node": defaults.get("node", "vps"),
+                "env": defaults.get("env", "prod"),
+                "tech": defaults.get("tech", []),
+                "isPublic": is_public,
+                "status": defaults.get("status", "operational"),
+            }
+        )
+
+        projected.append(entry)
+
+    return projected
+
+
+def compute_total_services(config: dict[str, Any]) -> int:
+    """Calculate total services/workloads running across all clusters."""
+    if "total_services" in config.get("apps", {}).get("platform", {}):
+        return int(config["apps"]["platform"]["total_services"])
+    try:
+        from toolkit.scripts.sync_homepage_config import build_service_tables
+
+        stg, prd, _ = build_service_tables(config)
+        return len(stg) + len(prd) + 2
+    except Exception:
+        apps_services = config.get("apps", {}).get("services", {})
+        count = sum(len(v) for v in apps_services.values() if isinstance(v, dict))
+        return count * 2 + 1 if count else 35
+
+
 def generate_manifest(config_path: Path | None = None) -> dict[str, Any]:
     """Project common.yaml SSOT into the public platform.json manifest."""
     cfg_file = config_path or COMMON_YAML_PATH
@@ -602,16 +819,14 @@ def generate_manifest(config_path: Path | None = None) -> dict[str, Any]:
 
     generated_at, source_commit = _get_commit_provenance(cfg_file)
 
-    # 1. Fleet nodes extraction
-    nodes: list[dict[str, Any]] = []
-    active_node_count = 0
-    for node_id, meta in NODE_METADATA.items():
-        node_entry = {"id": node_id, **meta}
-        if node_entry.get("status") != "standby":
-            active_node_count += 1
-        nodes.append(node_entry)
+    # 1. Fleet nodes dynamic projection
+    nodes, active_node_count, k8s_clusters, k8s_nodes = project_nodes(config)
 
-    # 2. Cluster metadata
+    # 2. Services dynamic projection and Zero-Addressing sanitization
+    services = project_services(config)
+    total_services = compute_total_services(config)
+
+    # 3. Cluster metadata
     k3s_ver = config.get("k3s", {}).get("version", "v1.34.4+k3s1")
     if not k3s_ver.startswith("K3s "):
         k3s_ver = f"K3s {k3s_ver}"
@@ -622,12 +837,12 @@ def generate_manifest(config_path: Path | None = None) -> dict[str, Any]:
         "gitops": "Argo CD v3.4.1 · 2 applications synced",
         "uptime": "99.9% (90d, Uptime Kuma)",
         "activeNodes": active_node_count,
-        "totalServices": 35,
-        "kubernetesClusters": 3,
-        "kubernetesNodes": 3,
+        "totalServices": total_services,
+        "kubernetesClusters": k8s_clusters,
+        "kubernetesNodes": k8s_nodes,
     }
 
-    # 3. Platform metrics
+    # 4. Platform metrics
     metrics = {
         "inferenceLatency": "not measured",
         "contextReduction": "67–82%",
@@ -637,22 +852,24 @@ def generate_manifest(config_path: Path | None = None) -> dict[str, Any]:
         "gitopsSyncLoop": "<30s Drift Loop",
     }
 
-    # 4. Assemble manifest
+    # 5. Assemble manifest
     manifest: dict[str, Any] = {
         "generated_at": generated_at,
         "source_commit": source_commit,
         "cluster": cluster_info,
         "metrics": metrics,
         "nodes": nodes,
-        "services": PLATFORM_SERVICES,
+        "services": services,
         "diagrams": ARCHITECTURE_DIAGRAMS,
     }
 
-    # 5. Zero-Addressing validation (fail closed before emitting)
+    # 6. Zero-Addressing validation (fail closed before emitting)
     serialized = json.dumps(manifest)
-    if re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", serialized):
-        raise ValueError("Zero-Addressing violation: IP address detected in manifest payload")
-    if re.search(r"\b[a-zA-Z0-9.-]+\.(?:internal|local|lan)\b", serialized):
+    if IPV4_REGEX.search(serialized):
+        raise ValueError("Zero-Addressing violation: IPv4 address detected in manifest payload")
+    if IPV6_REGEX.search(serialized):
+        raise ValueError("Zero-Addressing violation: IPv6 address detected in manifest payload")
+    if INTERNAL_HOST_REGEX.search(serialized):
         raise ValueError("Zero-Addressing violation: internal hostname detected (.internal, .local, or .lan)")
 
     return manifest

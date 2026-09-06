@@ -173,7 +173,7 @@ class TestPlatformManifestEdgeCases:
         assert re.match(r"^\d{4}-\d{2}-\d{2}T", ts)
 
     def test_zero_addressing_guard_catches_leaked_ip(self, monkeypatch) -> None:
-        mutated_services = list(platform_manifest.PLATFORM_SERVICES)
+        mutated_services = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
         mutated_services.append(
             {
                 "slug": "leak",
@@ -189,12 +189,34 @@ class TestPlatformManifestEdgeCases:
                 "status": "operational",
             }
         )
-        monkeypatch.setattr(platform_manifest, "PLATFORM_SERVICES", mutated_services)
-        with pytest.raises(ValueError, match="Zero-Addressing violation: IP address detected"):
+        monkeypatch.setattr(platform_manifest, "SERVICE_CATALOG_DEFAULTS", mutated_services)
+        with pytest.raises(ValueError, match="Zero-Addressing violation: IPv4 address detected"):
             platform_manifest.generate_manifest()
 
+    def test_zero_addressing_guard_catches_leaked_ipv6(self, monkeypatch) -> None:
+        for ipv6 in ["fd7a:115c:a1e0::/48", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "::1"]:
+            mutated_services = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
+            mutated_services.append(
+                {
+                    "slug": "ipv6-leak",
+                    "name": "Leak",
+                    "category": "Core Gateway",
+                    "categoryEs": "Gateway Principal",
+                    "description": f"Leaked IPv6 {ipv6} in description",
+                    "descriptionEs": "IPv6 filtrada",
+                    "node": "vps",
+                    "env": "prod",
+                    "tech": ["Go"],
+                    "isPublic": False,
+                    "status": "operational",
+                }
+            )
+            monkeypatch.setattr(platform_manifest, "SERVICE_CATALOG_DEFAULTS", mutated_services)
+            with pytest.raises(ValueError, match="Zero-Addressing violation: IPv6 address detected"):
+                platform_manifest.generate_manifest()
+
     def test_zero_addressing_guard_catches_internal_hostname(self, monkeypatch) -> None:
-        mutated_services = list(platform_manifest.PLATFORM_SERVICES)
+        mutated_services = list(platform_manifest.SERVICE_CATALOG_DEFAULTS)
         mutated_services.append(
             {
                 "slug": "internal-leak",
@@ -210,7 +232,7 @@ class TestPlatformManifestEdgeCases:
                 "status": "operational",
             }
         )
-        monkeypatch.setattr(platform_manifest, "PLATFORM_SERVICES", mutated_services)
+        monkeypatch.setattr(platform_manifest, "SERVICE_CATALOG_DEFAULTS", mutated_services)
         with pytest.raises(ValueError, match="Zero-Addressing violation: internal hostname detected"):
             platform_manifest.generate_manifest()
 
@@ -218,6 +240,65 @@ class TestPlatformManifestEdgeCases:
         mutated_services[-1]["description"] = "Host edge.cluster.local"
         with pytest.raises(ValueError, match="Zero-Addressing violation: internal hostname detected"):
             platform_manifest.generate_manifest()
+
+    def test_dynamic_projection_from_mock_config(self, tmp_path: Path) -> None:
+        mock_yaml = tmp_path / "mock_common.yaml"
+        mock_yaml.write_text(
+            """
+project_name: kubelab
+k3s:
+  version: "v1.34.4+k3s1"
+networking:
+  vps:
+    location: "always-on"
+    dashboard:
+      display_name: "Mock VPS"
+  nodes:
+    ace1:
+      location: "on-demand"
+      retired: true
+    custom_node:
+      location: "on-demand"
+      ansible_groups: ["dev_node"]
+      dashboard:
+        display_name: "Custom Node"
+clusters:
+  staging:
+    node: "vps"
+apps:
+  platform:
+    api:
+      name: "custom-api"
+      domain: "api.kubelab.live"
+      health_path: "/v2/health"
+      enable_auth: false
+      auth_level: "bypass"
+""",
+            encoding="utf-8",
+        )
+
+        manifest = platform_manifest.generate_manifest(config_path=mock_yaml)
+        cluster = manifest["cluster"]
+        # ace1 was retired, custom_node is active, vps is active -> activeNodes=2
+        assert cluster["activeNodes"] == 2
+        assert cluster["kubernetesClusters"] == 1
+        assert cluster["kubernetesNodes"] == 1
+
+        # Check custom_node was projected
+        nodes = manifest["nodes"]
+        custom = next(n for n in nodes if n["id"] == "custom_node")
+        assert custom["name"] == "Custom Node"
+        assert custom["runtime"] == "docker"
+        assert custom["tier"] == "homelab"
+
+        # Check dynamic sanitization: api has updated healthEndpoint
+        services = manifest["services"]
+        api = next(s for s in services if s["slug"] == "kubelab-api")
+        assert api["healthEndpoint"] == "https://api.kubelab.live/v2/health"
+
+        # Check private services have no URL
+        authelia = next(s for s in services if s["slug"] == "authelia")
+        assert "url" not in authelia or authelia["url"] is None
 
     def test_drift_gate_missing_file_returns_error(self, tmp_path: Path) -> None:
         missing = tmp_path / "does_not_exist.json"
