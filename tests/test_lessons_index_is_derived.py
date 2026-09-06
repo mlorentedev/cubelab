@@ -14,11 +14,16 @@ one: a test that only ever sees a correct corpus cannot tell "agrees" from
 from __future__ import annotations
 
 import pathlib
+import subprocess
 
 import pytest
 import yaml
+from typer.testing import CliRunner
 
+from toolkit.cli.tools import app as tools_app
 from toolkit.features import lessons_index
+
+runner = CliRunner()
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 REAL_LESSONS = REPO_ROOT / "docs" / "lessons"
@@ -253,3 +258,244 @@ class TestTheRewriteOnlyTouchesTheNumbers:
         assert lessons_index.newest_date(root) is None
         lessons_index.reconcile(root, apply=True)
         assert "None" not in (root / "_index.md").read_text()
+
+
+# =============================================================================
+# #1678 AC5 — the gate must refuse what it cannot fix
+# =============================================================================
+#
+# The counters are not the only way this corpus goes wrong, and for two other
+# conditions recounting is not merely useless, it is the operation that hides
+# them. Both were measured on 2026-09-05:
+#
+#   - two branches each took the number 439 from the same master (#1683, #1695);
+#     `--fix` would write the larger total and report success over a corpus with
+#     two lesson 439s;
+#   - a `git reset --soft` onto a moved base staged the deletion of a peer's
+#     lesson, and the pre-commit hook adjusted the counters DOWNWARD and printed
+#     `Passed`.
+#
+# Every test below builds its own tree. The git ones build a real repository,
+# because the distinction they turn on -- HEAD versus the index -- does not
+# exist in a fake.
+
+
+def _git(root: pathlib.Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _repo_with_lessons(tmp_path: pathlib.Path, names: dict[str, list[str]]) -> pathlib.Path:
+    """A real git repository whose committed corpus is exactly `names`.
+
+    `names` maps a category to its lesson filenames, so a test can give each
+    lesson a DISTINCT slug -- which `_tree` above deliberately does not, and
+    which the renumber door turns on.
+    """
+    repo = tmp_path / "repo"
+    lessons = repo / "docs" / "lessons"
+    for category, files in names.items():
+        (lessons / category).mkdir(parents=True, exist_ok=True)
+        rows = []
+        for fname in files:
+            (lessons / category / fname).write_text("---\nid: x\n---\nbody\n", encoding="utf-8")
+            rows.append(f"| 1 | [A lesson]({fname}) | 2026-01-01 |")
+        (lessons / category / "_index.md").write_text(
+            f"# {category}\n\n{len(files)} lessons, newest first.\n\n"
+            "| # | Lesson | Date |\n|---|---|---|\n" + "\n".join(rows) + "\n",
+            encoding="utf-8",
+        )
+    total = sum(len(f) for f in names.values())
+    rows = "\n".join(f"| [{c}]({c}/_index.md) | {len(f)} | Scope |" for c, f in names.items())
+    (lessons / "_index.md").write_text(
+        f"# Lessons\n\n{total} lessons, one file each. Newest: 2026-01-01. Open a category.\n\n"
+        "| Category | # | Scope |\n|---|---|---|\n" + rows + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "T")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "corpus")
+    return lessons
+
+
+class TestADuplicatedNumberIsRefused:
+    """The class the counters cannot see: two documents answering to one citation."""
+
+    def test_the_predicate_names_both_files(self, tmp_path: pathlib.Path) -> None:
+        lessons = _repo_with_lessons(
+            tmp_path,
+            {"alpha": ["lesson-439-a-ceiling.md"], "beta": ["lesson-439-a-mock.md"]},
+        )
+        collisions = lessons_index.number_collisions(lessons)
+        assert collisions == {"439": ["alpha/lesson-439-a-ceiling.md", "beta/lesson-439-a-mock.md"]}
+
+    def test_a_clean_corpus_has_no_collisions(self, tmp_path: pathlib.Path) -> None:
+        """The floor. A predicate that never fires would pass every test above."""
+        lessons = _repo_with_lessons(
+            tmp_path,
+            {"alpha": ["lesson-439-a-ceiling.md"], "beta": ["lesson-440-a-mock.md"]},
+        )
+        assert lessons_index.number_collisions(lessons) == {}
+        assert lessons_index.hazards(lessons) == []
+
+    def test_it_is_a_hazard_not_a_counter_fix(self, tmp_path: pathlib.Path) -> None:
+        lessons = _repo_with_lessons(
+            tmp_path,
+            {"alpha": ["lesson-439-a-ceiling.md"], "beta": ["lesson-439-a-mock.md"]},
+        )
+        found = lessons_index.hazards(lessons)
+        assert len(found) == 1
+        assert "claimed by more than one file" in found[0].headline
+        assert "439" in found[0].detail
+
+    def test_fix_writes_nothing_on_a_colliding_tree(self, tmp_path: pathlib.Path) -> None:
+        """The whole point of AC5: a stale counter AND a collision at once.
+
+        `--fix` here would make the total correct and leave two lesson 439s in
+        place, then report success. The counters must come out untouched.
+        """
+        lessons = _repo_with_lessons(
+            tmp_path,
+            {"alpha": ["lesson-439-a-ceiling.md"], "beta": ["lesson-439-a-mock.md"]},
+        )
+        top = lessons / "_index.md"
+        top.write_text(top.read_text().replace("2 lessons, one file each", "7 lessons, one file each"))
+        before = top.read_text()
+
+        result = runner.invoke(tools_app, ["lessons-index", "--root", str(lessons), "--fix"])
+
+        assert result.exit_code == 2, result.output
+        assert top.read_text() == before, "the counters were rewritten over a colliding corpus"
+
+
+class TestALessonThatHeadHasAndTheTreeDoesNotIsRefused:
+    """Measured on this very branch: the counters were adjusted DOWNWARD and passed."""
+
+    def test_a_deleted_lesson_is_found(self, tmp_path: pathlib.Path) -> None:
+        lessons = _repo_with_lessons(tmp_path, {"alpha": ["lesson-1-one.md", "lesson-2-two.md"]})
+        (lessons / "alpha" / "lesson-2-two.md").unlink()
+        assert lessons_index.removed_lessons(lessons) == ["alpha/lesson-2-two.md"]
+
+    def test_a_STAGED_deletion_is_still_found(self, tmp_path: pathlib.Path) -> None:
+        """The oracle must be HEAD, never the index.
+
+        `git ls-files` reports the file already gone once the deletion is staged
+        -- which is exactly the state a `reset --soft` onto a moved base leaves.
+        An oracle built on the index sees disk == index and passes at precisely
+        the moment it is needed. Measured before this code was written.
+        """
+        lessons = _repo_with_lessons(tmp_path, {"alpha": ["lesson-1-one.md", "lesson-2-two.md"]})
+        repo = lessons.parents[1]
+        _git(repo, "rm", "-q", "docs/lessons/alpha/lesson-2-two.md")
+
+        staged = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "docs/lessons/alpha/lesson-2-two.md"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert staged == "", "fixture is not exercising the case: the index still lists the file"
+
+        assert lessons_index.removed_lessons(lessons) == ["alpha/lesson-2-two.md"]
+
+    def test_a_renumber_is_not_a_removal(self, tmp_path: pathlib.Path) -> None:
+        """The door. A renumber is a delete plus an add, and it is how a
+        duplicate number gets resolved -- refusing it would send the next person
+        who renumbers straight to `--no-verify`."""
+        lessons = _repo_with_lessons(tmp_path, {"alpha": ["lesson-439-a-mock.md"]})
+        (lessons / "alpha" / "lesson-439-a-mock.md").unlink()
+        (lessons / "alpha" / "lesson-440-a-mock.md").write_text("---\nid: x\n---\nbody\n", encoding="utf-8")
+        assert lessons_index.removed_lessons(lessons) == []
+
+    def test_an_untouched_file_sharing_the_slug_does_not_excuse_a_deletion(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The `not in committed` half of the door.
+
+        If the excuse were merely "some file on disk has this slug", any other
+        lesson that happened to share it -- already committed, untouched by this
+        change -- would license the deletion. The excuse must be the ARRIVAL of a
+        file, which is what a renumber is.
+        """
+        lessons = _repo_with_lessons(
+            tmp_path,
+            {"alpha": ["lesson-1-a-mock.md"], "beta": ["lesson-2-a-mock.md"]},
+        )
+        (lessons / "alpha" / "lesson-1-a-mock.md").unlink()
+        assert lessons_index.removed_lessons(lessons) == ["alpha/lesson-1-a-mock.md"]
+
+    def test_fix_writes_nothing_when_a_lesson_disappeared(self, tmp_path: pathlib.Path) -> None:
+        lessons = _repo_with_lessons(tmp_path, {"alpha": ["lesson-1-one.md", "lesson-2-two.md"]})
+        (lessons / "alpha" / "lesson-2-two.md").unlink()
+        top = lessons / "_index.md"
+        before = top.read_text()
+
+        result = runner.invoke(tools_app, ["lessons-index", "--root", str(lessons), "--fix"])
+
+        assert result.exit_code == 2, result.output
+        assert top.read_text() == before, "the counters were adjusted downward over a shrunken corpus"
+
+    def test_allow_removal_opens_the_door(self, tmp_path: pathlib.Path) -> None:
+        """A deliberate deletion must have an exit, or the gate gets --no-verify'd."""
+        lessons = _repo_with_lessons(tmp_path, {"alpha": ["lesson-1-one.md", "lesson-2-two.md"]})
+        (lessons / "alpha" / "lesson-2-two.md").unlink()
+
+        assert lessons_index.hazards(lessons, allow_removal=True) == []
+
+        result = runner.invoke(
+            tools_app, ["lessons-index", "--root", str(lessons), "--fix", "--allow-removal"]
+        )
+        assert result.exit_code == 1, result.output  # counters rewritten
+        assert "1 lessons, one file each" in (lessons / "_index.md").read_text()
+
+
+class TestAnUnanswerableQuestionIsNotAPass:
+    """CANNOT CHECK is its own verdict, with its own exit code."""
+
+    def test_a_tree_outside_a_repository_raises(self, tmp_path: pathlib.Path) -> None:
+        root = _tree(tmp_path / "lessons", {"alpha": 2})
+        with pytest.raises(lessons_index.CannotCheck):
+            lessons_index.hazards(root)
+
+    def test_the_cli_exits_three_and_says_so(self, tmp_path: pathlib.Path) -> None:
+        root = _tree(tmp_path / "lessons", {"alpha": 2})
+        result = runner.invoke(tools_app, ["lessons-index", "--root", str(root), "--check"])
+        assert result.exit_code == 3, result.output
+        assert "CANNOT CHECK" in result.output
+
+    def test_no_git_on_path_is_cannot_check_not_clean(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing tool must never resolve to a clean bill of health."""
+        lessons = _repo_with_lessons(tmp_path, {"alpha": ["lesson-1-one.md"]})
+        monkeypatch.setattr(lessons_index.shutil, "which", lambda _: None)
+        with pytest.raises(lessons_index.CannotCheck, match="git is not on PATH"):
+            lessons_index.hazards(lessons)
+
+
+class TestTheHookTellsTheFailuresApart:
+    """The hint is half the defect: `--fix` is the wrong remedy for a hazard."""
+
+    def test_pre_push_branches_on_the_exit_code(self) -> None:
+        script = PRE_PUSH.read_text(encoding="utf-8")
+        assert "lessons_rc" in script, "the hook still only tests success/failure"
+        assert 'if [ "$lessons_rc" -eq 1 ]' in script, "the --fix hint is not gated on exit 1"
+
+    def test_the_fix_hint_is_not_printed_for_every_failure(self) -> None:
+        """Reading the script's shape, because the trap is textual: the hint sat
+        unconditionally under the failure branch, so a collision was told to run
+        the command that hides it."""
+        script = PRE_PUSH.read_text(encoding="utf-8")
+        hint = "toolkit tools lessons-index --fix && git commit -a --amend --no-edit"
+        assert hint in script, "the hint for the stale-counter case has gone missing"
+        before_hint, _, _ = script.partition(hint)
+        assert 'if [ "$lessons_rc" -eq 1 ]' in before_hint, (
+            "the --fix hint is reachable without the exit-code-1 branch above it"
+        )
+        assert "Do NOT reach for --fix here" in script, "the hazard branch does not warn against --fix"

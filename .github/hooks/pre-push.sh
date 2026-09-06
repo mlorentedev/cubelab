@@ -95,15 +95,38 @@ check_merged_branch "${1:-origin}"
 #
 # --check, never --fix: rewriting files mid-push would leave the working tree
 # ahead of what is being pushed.
+#
+# The exit code is read rather than merely tested, because the `--fix` hint
+# below is WRONG for two of the three failures and following it there makes the
+# defect invisible (#1678 AC5). Exit 1 is a stale counter, which --fix is exactly
+# right for. Exit 2 is a hazard -- a duplicated lesson number, or a lesson that
+# HEAD has and the tree does not -- where recounting produces a correct total
+# over a broken corpus. Exit 3 is CANNOT CHECK: the question went unanswered,
+# and an unanswered question is not a pass.
+#
+# Run ONCE and show the output, instead of running silently and then again to
+# display it: the second run can disagree with the first, and the operator would
+# be reading a different execution from the one that decided their push.
 # ---------------------------------------------------------------------------
-if ! poetry run -- toolkit tools lessons-index --check >/dev/null 2>&1; then
-  echo "[ERROR] The lesson index counters disagree with the files on disk."
-  poetry run -- toolkit tools lessons-index --check || true
+lessons_rc=0
+poetry run -- toolkit tools lessons-index --check || lessons_rc=$?
+if [ "$lessons_rc" -ne 0 ]; then
   echo ""
-  echo "        Usually this means a merge brought a lesson in without touching"
-  echo "        the counters — git merges that line as text and raises no conflict."
-  echo ""
-  echo "          toolkit tools lessons-index --fix && git commit -a --amend --no-edit"
+  if [ "$lessons_rc" -eq 1 ]; then
+    echo "[ERROR] The lesson index counters disagree with the files on disk."
+    echo ""
+    echo "        Usually this means a merge brought a lesson in without touching"
+    echo "        the counters — git merges that line as text and raises no conflict."
+    echo ""
+    echo "          toolkit tools lessons-index --fix && git commit -a --amend --no-edit"
+  else
+    echo "[ERROR] The lesson corpus is not in a state where the counters mean anything."
+    echo ""
+    echo "        The remedy is the one printed above, which is specific to what was"
+    echo "        found. Do NOT reach for --fix here: it would make the counters agree"
+    echo "        and leave the defect in place, which is the trap this guard exists"
+    echo "        to close. See #1678 AC5."
+  fi
   echo ""
   exit 1
 fi
