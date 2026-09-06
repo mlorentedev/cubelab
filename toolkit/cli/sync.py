@@ -12,6 +12,8 @@ Usage:
 
 from __future__ import annotations
 
+import difflib
+import itertools
 import re
 import shutil
 import subprocess
@@ -42,6 +44,22 @@ HOMEPAGE_DYNAMIC_PATTERNS: list[tuple[str, str]] = [
     # than dropping the key (TOOL-020), so both must normalize equal.
     (r'"data:image/svg\+xml;base64,[A-Za-z0-9+/=]*"', '"data:image/svg+xml;base64,SVG_BASE64"'),
 ]
+
+
+# A drifted generated file is usually a few lines out; a regenerated-from-scratch
+# one is thousands, and dumping that into a CI log buries the signal it exists
+# to provide.
+_DIFF_LINE_CAP = 60
+
+
+def _decode_for_diff(content: bytes) -> str:
+    """Best-effort text for a human-readable diff, never a second failure mode.
+
+    The gate compares bytes; this only renders them. A file the normalizer
+    already declined to decode must not take the diagnostic down with it, so
+    undecodable bytes are replaced rather than raised on.
+    """
+    return content.decode(errors="replace")
 
 
 def _normalize_content(content: bytes, patterns: list[tuple[str, str]]) -> bytes:
@@ -132,6 +150,40 @@ def _run_with_check(
             except ValueError:
                 display = f
             logger.error(f"  {display}")
+            # Say WHAT drifted, not only THAT something did. This gate is the
+            # only check that runs on Windows, so a platform-specific drift is
+            # reproducible nowhere a maintainer can attach a debugger — and
+            # until now its entire output was a filename. Measured 2026-09-06:
+            # platform.json drifted on the Windows runner and passed on Linux,
+            # and the job said nothing that could distinguish a line ending
+            # from a stale value from a real content difference.
+            #
+            # The diff is over the NORMALIZED bytes, the same values the
+            # comparison above rejected on. Diffing the raw content would show
+            # differences the gate deliberately ignores, which is how a
+            # diagnostic starts disagreeing with the check it explains.
+            old_text = _decode_for_diff(_normalize_content(snapshots[f] or b"", patterns))
+            new_text = _decode_for_diff(_normalize_content(new_contents[f] or b"", patterns))
+            diff = list(
+                itertools.islice(
+                    difflib.unified_diff(
+                        old_text.splitlines(keepends=True),
+                        new_text.splitlines(keepends=True),
+                        fromfile=f"committed/{f.name}",
+                        tofile=f"generated/{f.name}",
+                    ),
+                    _DIFF_LINE_CAP,
+                )
+            )
+            if diff:
+                logger.error("".join(diff))
+                if len(diff) == _DIFF_LINE_CAP:
+                    logger.error(f"  ... diff truncated at {_DIFF_LINE_CAP} lines")
+            else:
+                # Bytes differ, normalized text does not: the difference is in
+                # something the decode or the normalizer flattens. Saying so
+                # beats printing an empty diff under a drift claim.
+                logger.error("  bytes differ, normalized text does not — encoding, not content")
         logger.info(f"Run 'toolkit sync {label}' to update, then commit.")
         return False
 
@@ -261,6 +313,20 @@ def branding(
         result = sync_branding.main()
         if result != 0:
             raise typer.Exit(result)
+
+
+@app.command(name="platform-json")
+def platform_json(
+    check: Annotated[bool, typer.Option("--check", help="Check for drift without modifying files")] = False,
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Custom output path")] = None,
+) -> None:
+    """Sync public platform.json manifest from common.yaml SSOT (issue #1347)."""
+    from toolkit.features import platform_manifest
+
+    target = output or platform_manifest.DEFAULT_OUTPUT
+    rc = platform_manifest.sync(output_path=target, check=check)
+    if rc != 0:
+        raise typer.Exit(rc)
 
 
 @app.command()
@@ -415,6 +481,21 @@ def sync_all(
     except Exception as e:
         logger.error(f"branding sync crashed: {e}")
         failures.append("branding")
+
+    # 5. Platform Manifest (issue #1347)
+    try:
+        from toolkit.features import platform_manifest
+
+        output_files = [platform_manifest.DEFAULT_OUTPUT]
+        if check:
+            if not _run_with_check(output_files, lambda: platform_manifest.sync(check=False), "platform-json"):
+                failures.append("platform-json")
+        else:
+            if platform_manifest.sync() != 0:
+                failures.append("platform-json")
+    except Exception as e:
+        logger.error(f"platform-json sync crashed: {e}")
+        failures.append("platform-json")
 
     if failures:
         logger.error(f"Sync failures: {', '.join(failures)}")
