@@ -51,7 +51,7 @@ apps:
       enable_blog: false
       enable_homelabs: false
       enable_contact: false
-      version: sha-fbb9970
+      version: sha-e62fcef
 
   # Third-party services
   services:
