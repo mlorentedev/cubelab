@@ -1,17 +1,17 @@
 # Lessons
 
-446 lessons, one file each. Newest: 2026-09-06. Open a category for its list.
+450 lessons, one file each. Newest: 2026-09-06. Open a category for its list.
 
 | Category | # | Scope |
 |---|---|---|
-| [identity-secrets](identity-secrets/_index.md) | 58 | Authelia, OIDC, SOPS, credentials |
+| [identity-secrets](identity-secrets/_index.md) | 59 | Authelia, OIDC, SOPS, credentials |
 | [kubernetes](kubernetes/_index.md) | 52 | Cluster, workloads, manifests |
-| [networking-dns](networking-dns/_index.md) | 45 | DNS, VPN mesh, host networking |
+| [networking-dns](networking-dns/_index.md) | 46 | DNS, VPN mesh, host networking |
 | [ansible-provisioning](ansible-provisioning/_index.md) | 49 | Roles, playbooks, IaC, node setup |
 | [process-method](process-method/_index.md) | 69 | Specs, reviews, how work is run |
 | [edge-tls](edge-tls/_index.md) | 27 | Traefik, TLS, the request path |
-| [toolkit-tooling](toolkit-tooling/_index.md) | 36 | Toolkit CLI, Make, Python, tests |
-| [gitops-delivery](gitops-delivery/_index.md) | 28 | Argo CD, releases, promotion |
+| [toolkit-tooling](toolkit-tooling/_index.md) | 38 | Toolkit CLI, Make, Python, tests |
+| [gitops-delivery](gitops-delivery/_index.md) | 29 | Argo CD, releases, promotion |
 | [ci-automation](ci-automation/_index.md) | 32 | CI workflows, gates, GitHub |
 | [observability](observability/_index.md) | 20 | Metrics, logs, alerting |
 | [containers-docker](containers-docker/_index.md) | 14 | Docker, Compose, image builds |

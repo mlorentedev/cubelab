@@ -1,9 +1,11 @@
 # The toolkit CLI, Make, Python and local tooling
 
-36 lessons, newest first. Back to [all categories](../_index.md).
+38 lessons, newest first. Back to [all categories](../_index.md).
 
 | # | Lesson | Date |
 |---|---|---|
+| 450 | [A key appended by ruamel renders below the next block's comment](lesson-450-a-key-appended-by-ruamel-renders-below-the-next-blocks-comment.md) | 2026-09-04 |
+| 448 | [A rebuild recipe is not an inventory of what is running](lesson-448-a-rebuild-recipe-is-not-an-inventory-of-what-is-running.md) | 2026-08-25 |
 | 435 | [A stub's canned answer decides which of your assertions can fail](lesson-435-a-stubs-canned-answer-decides-which-assertions-can-fail.md) | 2026-09-05 |
 | 432 | [A file that contains its own explanation cannot be edited by a pattern that matches it](lesson-432-a-guard-that-cannot-tell-a-warning-from-an-instance.md) | 2026-09-04 |
 | 424 | [A convergence step scoped to the creation diff never repairs what already exists](lesson-424-a-convergence-step-scoped-to-the-creation-diff-repairs-nothing.md) | 2026-09-04 |

@@ -18,4 +18,6 @@ tags: [kubelab, toolkit-tooling]
 
 **Rule:** In any CLI meant to be chained, the **exit code is the contract** — a warning is a comment, not a signal. If a step's failure invalidates the steps after it, it must be non-zero by default; "strict mode" as an opt-in just relocates the silent failure to whoever didn't pass the flag. Audit the last step of every command specially: it's the one that most often degrades to a warning because "the real work already succeeded".
 
+**Seen again**: #1493 (2026-09-01) found `provision-postgres-tenant` warning and returning 0 on a failed exec, and targeting the ambient kubeconfig instead of `--env`; both fixed the same way.
+
 **Tags:** `#cli` `#exit-code` `#silent-failure` `#kubernetes` `#rollout` `#fail-closed` `#tool-021` `#gotcha`
