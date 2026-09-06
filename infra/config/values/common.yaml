@@ -89,9 +89,9 @@ networking:
   # specs/SEC-006-cloud-firewall-for-running-vps/proposal.md before touching it.
   firewall:
     vps_inbound:
-    - { port: 22, proto: tcp, description: "SSH" }
-    - { port: 80, proto: tcp, description: "HTTP — Traefik, ACME http-01" }
-    - { port: 443, proto: tcp, description: "HTTPS — Traefik" }
+    - {port: 22, proto: tcp, description: "SSH"}
+    - {port: 80, proto: tcp, description: "HTTP — Traefik, ACME http-01"}
+    - {port: 443, proto: tcp, description: "HTTPS — Traefik"}
     # Headscale's embedded DERP STUN endpoint. NOT the relay: the relay is
     # served over 443 (roles/headscale/templates/config.yaml.j2 — the derp block
     # names 0.0.0.0:3478 as its only UDP listener).
@@ -106,7 +106,7 @@ networking:
     # It is in active use, not dormant. Keeping 3478 open is therefore load
     # bearing rather than merely conservative, and retiring the embedded DERP
     # (its own ticket) would move real traffic onto a public relay.
-    - { port: 3478, proto: udp, description: "Headscale DERP STUN" }
+    - {port: 3478, proto: udp, description: "Headscale DERP STUN"}
     # K3s prod API server. Present because it is load-bearing TODAY, not because
     # a public control plane is desirable: ~/.kube/kubelab-prod-config points at
     # https://162.55.57.175:6443, and CLAUDE.md's "kubeconfig must use the public
@@ -116,8 +116,8 @@ networking:
     # prod at 100.64.0.2:6443 over Tailscale). Moving the operator's kubeconfig to
     # Tailscale and dropping this line is tracked separately; it is a capability
     # change, and SEC-006 deliberately does not couple one to a security fix.
-    - { port: 6443, proto: tcp, description: "K3s prod API server" }
-    - { port: 41641, proto: udp, description: "Tailscale WireGuard" }
+    - {port: 6443, proto: tcp, description: "K3s prod API server"}
+    - {port: 41641, proto: udp, description: "Tailscale WireGuard"}
 
     # DELIBERATELY ABSENT — read this before "fixing" an omission.
     #
@@ -485,6 +485,39 @@ deploy:
   rollback_delay: 5s
 
 # ===========================================================================
+# CI / FORGE POLICY
+# ===========================================================================
+# Reconciled by `toolkit tools branch-protection` (#1678). ONLY the two keys
+# below are managed: everything else on GitHub's protection object is carried
+# through verbatim from the live read, because the API's PUT is a whole-object
+# replace that clears what it does not receive. Adding a key here that nothing
+# reconciles would be worse than leaving it out — it would read as managed.
+ci:
+  branch_protection:
+    master:
+      # False deliberately. `strict` requires a branch be current before it can
+      # merge, and the one-click way to make it current is GitHub's "Update
+      # branch" button — a merge executed on GitHub's servers, where no
+      # pre-commit and no pre-push hook can run. It fired repeatedly on
+      # 2026-09-05, and on one branch the resulting tree was missing a table row
+      # present in one of its parents, with no conflict raised. Removing the
+      # requirement removes the incentive; `Tests` below is what replaces the
+      # assurance it was buying.
+      strict: false
+      # Exact check-run / commit-status names, verified against a real head sha
+      # rather than transcribed from the workflow: a required context that never
+      # reports blocks every merge forever. `review-attestation` is a commit
+      # STATUS, the rest are check-runs; both kinds are matched by name here.
+      # `Tests` runs unconditionally on every pull request (ci.yml has no `if:`
+      # and no paths filter on it), so requiring it costs no extra CI minutes —
+      # only the latency of waiting for a job that was already running.
+      required_contexts:
+        - Validate
+        - Detect Changes
+        - review-attestation
+        - Tests
+
+# ===========================================================================
 # K3S CLUSTER
 # ===========================================================================
 k3s:
@@ -632,7 +665,7 @@ edge:
   errors:
     name: errors
     image_name: kubelab-errors
-    version: "1.1.6"
+    version: "1.2.0"
     port: 8080
     health_path: /health
     resources:
@@ -854,8 +887,8 @@ apps:
       # is what the newsletter form has been doing. The target port is NOT
       # restated here; the generator reads it from the target app.
       extra_routes:
-        - path_prefix: /api
-          service: api
+      - path_prefix: /api
+        service: api
       # Site Info
       site_title: "Manu Lorente"
       site_description: "Cloud Native Automation in Spanish"
@@ -1166,29 +1199,38 @@ apps:
           # would fail forever on a correct hook. Measured 2026-09-04 on
           # personal/resume; see `webhook_changes`.
           #
-          # Both are needed and neither is spare: the workflow branches on
-          # pull_request `action` for the In Review / Done buckets, and falls back to
+          # All three are needed and none is spare: the workflow branches on
+          # pull_request `action` for the In Review / Done buckets, falls back to
           # head_commit.message on a push, which is the only path that moves a task
-          # for work landing without a pull request.
+          # for work landing without a pull request, and `issues` is the only
+          # trigger that CREATES a task at all (APP-CONFIG-008).
+          #
+          # `issues` is the event Gitea and GitHub both name for issue lifecycle
+          # actions; the workflow narrows it further to `opened`/`reopened`, which
+          # is exactly what the `add-to-project.yml` it retires fired on. Without
+          # it the create path is unreachable and every issue silently misses the
+          # board -- with a 200 recorded on every delivery, because there is no
+          # delivery to record.
           events:
             - push
             - pull_request
+            - issues
           branch_filter: "*"
           active: true
         organizations:
           teledyne:
             repositories:
-              - name: fae-brain
-                migrate_from: github:mlorentedev/fae-brain
-                private: false
-              - name: openkm-brain
-                migrate_from: github:mlorentedev/openkm-brain
-                private: false
+            - name: fae-brain
+              migrate_from: github:mlorentedev/fae-brain
+              private: false
+            - name: openkm-brain
+              migrate_from: github:mlorentedev/openkm-brain
+              private: false
           personal:
             repositories:
-              - name: resume
-                migrate_from: github:mlorentedev/resume
-                private: false
+            - name: resume
+              migrate_from: github:mlorentedev/resume
+              private: false
           kubelab:
             repositories: []
         # Mirrors the limits the K8s Deployment carried, so the move is not also a
@@ -1208,6 +1250,28 @@ apps:
         auth_level: bypass
         default_port: 3456
         health_path: /api/v1/info
+        # The ONE board every forge event routes to (ADR-066, revised 2026-09-05).
+        #
+        # ADR-066 originally mirrored ADR-065's Gitea organizations into three
+        # Vikunja namespaces (kubelab, personal, teledyne). That mapping is
+        # withdrawn, and the reason is that ADR-065 D2's argument does not
+        # transfer: the organization is the BACKUP AND RETENTION class for
+        # repository CONTENT, and a Vikunja task is metadata about that content,
+        # not the content. Meanwhile the split cost something real — Kanban
+        # buckets are per view per project, so three projects meant three boards
+        # and no single "what is next", which is the one thing the retired
+        # GitHub Project actually provided.
+        #
+        # Provenance did not disappear, it moved twice over: the `AREA-NNN` key
+        # is mandatory in every task title (it is the join key `?s=` searches on),
+        # and `area:*` labels carry it as a filterable field. Splitting by project
+        # duplicated information that already travels in the field the whole
+        # integration depends on.
+        #
+        # Matched by TITLE, case-insensitively, because the workflow resolves it
+        # through `GET /projects` — an id would be environment-specific and
+        # opaque, and would silently point at a different board per env.
+        default_project: Bitacora
         resources:
           cpu_limit: "0.5"
           memory_limit: "256M"
@@ -1223,7 +1287,8 @@ apps:
         storage:
           # Account ID is not a secret (same account as `backup.r2` above) --
           # R2's S3 endpoint embeds it in the hostname, unlike AWS S3.
-          s3_endpoint: https://76967f5ede1ce50efce34d90b7e94958.r2.cloudflarestorage.com
+          s3_endpoint:
+            https://76967f5ede1ce50efce34d90b7e94958.r2.cloudflarestorage.com
           # Staging's bucket (base default). Prod overrides to `kubelab-vikunja`
           # via the vikunja-config configMapGenerator (behavior: merge) in
           # overlays/prod/kustomization.yaml -- separate bucket, separate
