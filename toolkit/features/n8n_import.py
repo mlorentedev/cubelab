@@ -24,6 +24,7 @@ deleting the workflow in n8n and re-running restores it identically.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -101,6 +102,80 @@ N8N_IMPORT_CATALOG: list[N8nImportSpec] = [
         envs=frozenset({"staging", "prod"}),
     ),
 ]
+
+
+# ── Placeholders ──────────────────────────────────────────────────────────────
+#
+# A committed workflow may carry `RESOLVE_*` tokens filled from SSOT at import
+# time, the same convention `cluster_bootstrap` uses for
+# `RESOLVE_RPI4_TAILSCALE_IP` (ADR-047 D2, `k8s_render._PLACEHOLDER_RE`).
+#
+# Why not an env var on the pod: `n8n-config` is a plain ConfigMap, not a
+# `configMapGenerator` entry, and n8n reads env once at container start. A
+# changed key would leave the running pod on the old value while Argo CD reported
+# Synced/Healthy — the silent no-op of lesson-404. Substituting into the imported
+# document means there is no second place for the value to be stale in.
+
+#: Every placeholder this module knows how to fill, mapped to its SSOT path.
+#: Adding a token to a workflow without adding it here fails the import rather
+#: than shipping the literal string — a workflow searching Vikunja for a project
+#: whose title is the token itself would fail closed, but it would fail in
+#: production instead of at the point the mistake was made.
+#:
+#: NOTE FOR ANYONE DOCUMENTING THIS: the scanner cannot tell a mention from a
+#: use. Spelling another subsystem's token inside a workflow comment makes the
+#: import demand a mapping for it — measured, by writing exactly that comment
+#: and watching six tests go red. Refer to other placeholders by description,
+#: not by name, inside any file this runs over.
+PLACEHOLDER_SSOT: dict[str, str] = {
+    "RESOLVE_VIKUNJA_DEFAULT_PROJECT": "apps.services.core.vikunja.default_project",
+}
+
+_PLACEHOLDER_RE = re.compile(r"RESOLVE_[A-Z0-9_]+")
+
+
+class PlaceholderError(Exception):
+    """A `RESOLVE_*` token is unknown, or its SSOT path holds nothing."""
+
+
+def resolve_placeholders(text: str, cm: ConfigurationManager) -> str:
+    """Fill every `RESOLVE_*` token from SSOT, or refuse.
+
+    FAILS CLOSED on an unknown token and on a declared path that resolves to
+    nothing. Substituting an empty string would be worse than not substituting:
+    the workflow would look for a project titled `''`, match nothing, and answer
+    a correct-looking 422 that names no cause.
+    """
+    found = set(_PLACEHOLDER_RE.findall(text))
+    if not found:
+        return text
+
+    unknown = found - set(PLACEHOLDER_SSOT)
+    if unknown:
+        raise PlaceholderError(
+            f"workflow carries unmapped placeholder(s) {sorted(unknown)}. Add each to "
+            f"`PLACEHOLDER_SSOT` with the common.yaml path it reads, or remove it from "
+            f"the workflow — an unsubstituted token reaches the running workflow as a "
+            f"literal string."
+        )
+
+    config = cm.get_merged_config()
+    for token in sorted(found):
+        path = PLACEHOLDER_SSOT[token]
+        node: Any = config
+        for part in path.split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+        value = "" if node is None else str(node).strip()
+        if not value:
+            raise PlaceholderError(
+                f"placeholder {token} maps to `{path}`, which is absent or empty in the "
+                f"merged config. It is required rather than defaulted: a workflow that "
+                f"substitutes an empty value fails in production and names no cause."
+            )
+        text = text.replace(token, value)
+        logger.info(f"  Resolved {token} -> {value!r} (from {path})")
+
+    return text
 
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -213,9 +288,20 @@ def _process_spec(
 
     try:
         workflow_text = workflow_full.read_text()
+    except OSError as exc:
+        logger.error(f"  Failed to read workflow '{workflow_full}': {exc}")
+        return False
+
+    try:
+        workflow_text = resolve_placeholders(workflow_text, cm)
+    except PlaceholderError as exc:
+        logger.error(f"  {exc}")
+        return False
+
+    try:
         workflow_doc = json.loads(workflow_text)
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.error(f"  Failed to read/parse workflow '{workflow_full}': {exc}")
+    except json.JSONDecodeError as exc:
+        logger.error(f"  Failed to parse workflow '{workflow_full}': {exc}")
         return False
 
     try:

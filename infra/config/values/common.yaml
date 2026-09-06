@@ -1250,6 +1250,28 @@ apps:
         auth_level: bypass
         default_port: 3456
         health_path: /api/v1/info
+        # The ONE board every forge event routes to (ADR-066, revised 2026-09-05).
+        #
+        # ADR-066 originally mirrored ADR-065's Gitea organizations into three
+        # Vikunja namespaces (kubelab, personal, teledyne). That mapping is
+        # withdrawn, and the reason is that ADR-065 D2's argument does not
+        # transfer: the organization is the BACKUP AND RETENTION class for
+        # repository CONTENT, and a Vikunja task is metadata about that content,
+        # not the content. Meanwhile the split cost something real — Kanban
+        # buckets are per view per project, so three projects meant three boards
+        # and no single "what is next", which is the one thing the retired
+        # GitHub Project actually provided.
+        #
+        # Provenance did not disappear, it moved twice over: the `AREA-NNN` key
+        # is mandatory in every task title (it is the join key `?s=` searches on),
+        # and `area:*` labels carry it as a filterable field. Splitting by project
+        # duplicated information that already travels in the field the whole
+        # integration depends on.
+        #
+        # Matched by TITLE, case-insensitively, because the workflow resolves it
+        # through `GET /projects` — an id would be environment-specific and
+        # opaque, and would silently point at a different board per env.
+        default_project: Bitacora
         resources:
           cpu_limit: "0.5"
           memory_limit: "256M"

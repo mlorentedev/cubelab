@@ -54,7 +54,21 @@ Pragmatic evaluation showed that adopting **Vikunja** (~50MB RAM footprint) deli
 5. **D5 · Slack ChatOps & Notification Routing**:
    - `/task create` slash command parses project and priority, returns an immediate ACK in <500ms (avoiding Slack's 3000ms timeout), and updates Slack asynchronously via response URLs.
 6. **D6 · Idempotent Platform Reconciler (`toolkit`)**:
-   - `toolkit/features/vikunja_reconciler.py` (`make sync-vikunja`) reconciles namespaces (`kubelab`, `personal`, `teledyne` per [ADR-065](adr-065-forge-repository-organization.md)), standard labels, and webhooks idempotently (`changed=0`).
+   - `toolkit/features/vikunja_reconciler.py` (`make sync-vikunja`) reconciles the declared project, standard labels, and webhooks idempotently (`changed=0`).
+
+### D6 revision — 2026-09-05: one board, not one project per organization
+
+D6 originally read *"reconciles namespaces (`kubelab`, `personal`, `teledyne` per [ADR-065](adr-065-forge-repository-organization.md))"*. **Withdrawn.** The single board is declared at `apps.services.core.vikunja.default_project` (`Bitacora`), and every forge event routes to it.
+
+**ADR-065 D2's argument does not transfer.** There, the organization is chosen as the axis because *"the org is the backup and retention class"* — what gets copied to R2 is answered by reading the namespace, and a third party's material never inherits a personal repository's retention policy. That reasoning is about repository **content**. A Vikunja task is *metadata about* that content, not the content, so importing the split bought none of the property it was chosen for.
+
+**And it cost something measurable.** Vikunja's Kanban buckets are per **view**, per **project** (`pkg/models/project_view.go`). Three projects therefore meant three boards and no single "what is next" — which is the one thing the retired GitHub Project actually provided, and the reason ADR-050 D3's replacement had to be as good as the thing it replaced.
+
+**Provenance did not disappear; it is carried twice already.** The `AREA-NNN` key is mandatory in every task title — it is the join key `GET /tasks?s=` searches on, so the integration cannot function without it — and `area:*` labels make it a filterable field. Splitting by project duplicated information that already travels in the field everything else depends on.
+
+**What this does not decide.** Vikunja's ACL is per project, so one board means sharing is all-or-nothing. If a third party is ever given access to their own tasks, this is the decision to revisit, and the shape to revisit it with is a parent project with children — *not* a return to three peers, since that reintroduces the missing cross-cutting board. No such requirement exists today.
+
+Consequences already applied: `multi-forge-sync` resolves the declared project by title (substituted from SSOT at import time, never read from `n8n-config` — that ConfigMap is a plain resource, so a changed key would leave the pod on the old value while Argo CD reported Synced, per lesson-404), and `DEFAULT_NAMESPACES` is retired with the `/namespaces` endpoint it targeted, which Vikunja 1.0 no longer serves (#1701).
 
 ## Consequences
 

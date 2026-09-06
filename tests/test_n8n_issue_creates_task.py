@@ -18,7 +18,9 @@ from typing import Any
 
 import yaml
 
+from toolkit.features.configuration import ConfigurationManager
 from toolkit.features.gitea_repos import load_webhook
+from toolkit.features.n8n_import import PLACEHOLDER_SSOT, resolve_placeholders
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / "infra/n8n/workflows/multi-forge-sync.json"
@@ -33,7 +35,16 @@ def workflow() -> dict[str, Any]:
 
 
 def node_js(name: str) -> str:
-    return next(n for n in workflow()["nodes"] if n["name"] == name)["parameters"]["jsCode"]
+    """The node's code AS IT RUNS — placeholders resolved from SSOT.
+
+    The committed JSON carries `RESOLVE_*` tokens that `n8n_import` fills at
+    import time. Executing the raw text would test an artifact that never runs
+    and would pass with a project title of literally
+    `RESOLVE_VIKUNJA_DEFAULT_PROJECT`, so the real resolver is used here — which
+    also pins that every token in the workflow is mapped.
+    """
+    raw = next(n for n in workflow()["nodes"] if n["name"] == name)["parameters"]["jsCode"]
+    return resolve_placeholders(raw, ConfigurationManager(env="prod"))
 
 
 def node(name: str) -> dict[str, Any]:
@@ -96,8 +107,9 @@ ERROR_ITEM: list[Any] = [{"error": "401 unauthorized"}]  # what `continueOnFail`
 def parse_event(body: dict[str, Any]) -> dict[str, Any]:
     payload = json.dumps(body, separators=(",", ":"))
     js = node_js("Parse Forge Event")
+    headers = json.dumps({"x-gitea-signature": sign(payload.encode())})
     script = f"""
-    const $json = {{ rawBody: {json.dumps(payload)}, headers: {json.dumps({"x-gitea-signature": sign(payload.encode())})} }};
+    const $json = {{ rawBody: {json.dumps(payload)}, headers: {headers} }};
     const $env = {json.dumps({"FORGE_WEBHOOK_SECRET": SECRET})};
     const result = (() => {{
         {js}
@@ -360,17 +372,55 @@ def test_an_unmatched_repository_does_not_fall_back_to_a_default_project() -> No
         assert result["readyToCreate"] is False, shape.__name__
 
 
-def test_the_repository_name_wins_over_the_owning_organisation() -> None:
-    """Also the split-shape regression: with two projects, `$json` is the first
-    one. A node reading it as the list would match nothing and answer 422 for
-    every repository, forever."""
-    prior = {"Extract Issue Task Match": {"repoOwner": "kubelab", "repoName": "kubelab-cli",
-                                          "searchFailed": False}}
-    projects = [{"id": 3, "title": "kubelab"}, {"id": 9, "title": "kubelab-cli"}]
-    for shape in (split_items, wrapped_array, wrapped_data):
-        result = run_node(node_js("Pick Project for Repo"), shape(projects), prior)
-        assert result["projectId"] == 9, shape.__name__
-        assert result["readyToCreate"] is True, shape.__name__
+def test_every_repository_routes_to_the_one_declared_board() -> None:
+    """ADR-066 revised: one board, provenance in `area:*` labels and in the
+    mandatory `AREA-NNN` title key — not in separate projects.
+
+    So the repository no longer selects anything. A node that still matched on it
+    would route `teledyne/fae-brain` somewhere other than `kubelab/kubelab`,
+    which is the split this change withdrew.
+    """
+    declared = ConfigurationManager(env="prod").get_merged_config()["apps"]["services"]["core"]["vikunja"][
+        "default_project"
+    ]
+    projects = [{"id": 1, "title": "Inbox"}, {"id": 2, "title": declared}, {"id": 3, "title": "kubelab"}]
+
+    for repo in ({"repoOwner": "teledyne", "repoName": "fae-brain"},
+                 {"repoOwner": "kubelab", "repoName": "kubelab"},
+                 {"repoOwner": "personal", "repoName": "resume"}):
+        for shape in (split_items, wrapped_array, wrapped_data):
+            result = run_node(node_js("Pick Project for Repo"),
+                              shape(projects), {"Extract Issue Task Match": {**repo, "searchFailed": False}})
+            assert result["projectId"] == 2, f"{repo['repoName']}/{shape.__name__}"
+            assert result["readyToCreate"] is True
+
+
+def test_the_declared_board_is_matched_case_insensitively_by_title() -> None:
+    """Resolved by title rather than id, because an id is environment-specific
+    and opaque — the same workflow would silently target a different board per
+    environment, and nothing would report it."""
+    declared = ConfigurationManager(env="prod").get_merged_config()["apps"]["services"]["core"]["vikunja"][
+        "default_project"
+    ]
+    prior = {"Extract Issue Task Match": {"repoOwner": "kubelab", "repoName": "kubelab", "searchFailed": False}}
+
+    result = run_node(node_js("Pick Project for Repo"),
+                      split_items([{"id": 7, "title": f"  {declared.upper()}  "}]), prior)
+    assert result["projectId"] == 7
+
+
+def test_the_workflow_declares_no_placeholder_the_importer_cannot_fill() -> None:
+    """An unmapped `RESOLVE_*` token reaches the running workflow as a literal
+    string. It would fail closed — nothing is titled `RESOLVE_...` — but in
+    production, and naming no cause. The import refuses instead; this asserts the
+    committed workflow gives it nothing to refuse."""
+    import re
+
+    tokens = set(re.findall(r"RESOLVE_[A-Z0-9_]+", WORKFLOW_PATH.read_text(encoding="utf-8")))
+    assert tokens <= set(PLACEHOLDER_SSOT), (
+        f"unmapped placeholder(s) {sorted(tokens - set(PLACEHOLDER_SSOT))} — add them to "
+        f"`PLACEHOLDER_SSOT` with the common.yaml path they read"
+    )
 
 
 # ── The graph's own honesty ───────────────────────────────────────────────────
