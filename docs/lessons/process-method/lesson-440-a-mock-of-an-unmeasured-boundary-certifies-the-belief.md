@@ -1,5 +1,5 @@
 ---
-id: lesson-439-a-mock-of-an-unmeasured-boundary-certifies-the-belief
+id: lesson-440-a-mock-of-an-unmeasured-boundary-certifies-the-belief
 type: lesson
 status: active
 created: "2026-09-05"
