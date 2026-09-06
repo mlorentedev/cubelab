@@ -18,7 +18,7 @@ issue: "mlorentedev/kubelab#679"   # ARGO artifact-parity
 
 Accepted — 2026-06-26
 
-Extends [ADR-055](ADR-055-semver-everywhere-delivery.md) (accepted for the extracted `web` repo) to kubelab's `api` image. Refines [ADR-046](adr-046-gitops-delivery-promotion-strategy.md) D2 by closing its artifact-parity gap structurally. **Scope: `api` only** — `errors` is deliberately excluded (see *Alternatives*).
+Extends [ADR-055](https://github.com/mlorentedev/web/blob/master/docs/adr/ADR-055-semver-everywhere-delivery.md) (accepted for the extracted `web` repo) to kubelab's `api` image. Refines [ADR-046](adr-046-gitops-delivery-promotion-strategy.md) D2 by closing its artifact-parity gap structurally. **Scope: `api` only** — `errors` is deliberately excluded (see *Alternatives*).
 
 > **Numbering:** `web` claimed `ADR-055` globally (2026-06-25); kubelab's next free number is `056`. The decision is independent of the number.
 
@@ -31,7 +31,7 @@ release.yml :: publish-api  (if api_release_created)
   └─ uses ci-publish.yml  →  docker build ./apps/api  →  push kubelab-api:X.Y.Z
 ```
 
-`ci-publish.yml` is the reusable **build** workflow. So on every release, the prod image is a fresh `docker build` from the release commit. This is the exact defect [ADR-055](ADR-055-semver-everywhere-delivery.md) names: the prod image (a) is built at a different time than staging's — base-layer and transitive-dependency drift — and (b) was never run in staging as those exact bytes. **Prod ships what staging never validated.**
+`ci-publish.yml` is the reusable **build** workflow. So on every release, the prod image is a fresh `docker build` from the release commit. This is the exact defect [ADR-055](https://github.com/mlorentedev/web/blob/master/docs/adr/ADR-055-semver-everywhere-delivery.md) names: the prod image (a) is built at a different time than staging's — base-layer and transitive-dependency drift — and (b) was never run in staging as those exact bytes. **Prod ships what staging never validated.**
 
 This is not theoretical. The first gated prod promotion (`api` → `1.1.0`, kubelab#664) **CrashLooped in prod** on an init-guard that staging never exercised (incident #666), precisely because staging ran a different artifact than the rebuilt `1.1.0`. kubelab#679 tracks the process gap; its originally-proposed fix was a *manual* "validate the candidate semver on staging before promoting" runbook step. That workaround adds ceremony and still relies on human discipline.
 
@@ -92,7 +92,7 @@ The CalVer "Global Release Bundle" (`ci-release.yml`) divergence from release-pl
 
 ## References
 
-- [ADR-055](ADR-055-semver-everywhere-delivery.md) (`web` repo) — the pattern this extends; verified `kubelab-web:1.2.0` == `:sha-60b24e7`.
+- [ADR-055](https://github.com/mlorentedev/web/blob/master/docs/adr/ADR-055-semver-everywhere-delivery.md) (`web` repo) — the pattern this extends; verified `kubelab-web:1.2.0` == `:sha-60b24e7`.
 - [adr-046-gitops-delivery-promotion-strategy](adr-046-gitops-delivery-promotion-strategy.md) — D2 (two immutable lanes) refined here.
 - [adr-027-generated-code-drift-detection](adr-027-generated-code-drift-detection.md) — guarantees overlays == generator output; the re-tag flows through the same SSOT.
 - kubelab#679 (artifact parity), #666 (the CrashLoop incident), #678 (ARGO-016 epic), #373 (DELIVERY-001, next level).
