@@ -129,6 +129,19 @@ def test_the_scan_finds_code_to_scan() -> None:
         "derives is empty. If that is genuinely true now, delete this file rather than "
         "leaving a guard that cannot fail."
     )
+    assert any(REQUIRE_CALL.search(code) for code in sources.values()), (
+        "no committed Code node matches REQUIRE_CALL, so the allowlist requirement is "
+        "empty and `test_every_builtin_a_code_node_requires_is_allowlisted` skips — "
+        "green without having checked anything. `Parse Forge Event` does "
+        "`require('crypto')` today, so this firing means the regex stopped matching "
+        "reality, not that the requirement went away. Widen the pattern rather than "
+        "deleting the assertion.\n\n"
+        "BOTH derivations are pinned, not just `$env`, and they fail differently: a "
+        "regex that silently stops matching turns its dependent test into a skip, and "
+        "a skip is not a pass. Raised by pr-agent on #1706 — the `$env` half had this "
+        "guard and the `require` half did not, which is the same asymmetry that let "
+        "the bug being fixed here reach prod."
+    )
 
 
 @pytest.mark.parametrize("env", ENVIRONMENTS)
