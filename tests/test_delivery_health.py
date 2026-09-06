@@ -228,3 +228,16 @@ def test_an_empty_verdict_set_is_unanswerable_not_clean():
     assert dh.worst([]) == 2
     assert dh.worst([dh.classify("w", [{"conclusion": "success"}])]) == 0
     assert dh.worst([dh.classify("w", [])]) == 1
+
+
+def test_the_cycle_guard_keys_on_the_file_not_its_spelling():
+    """Two spellings of one path must not defeat the guard.
+
+    Theoretical in this repository — Actions requires the `./` prefix — but a
+    cycle guard that fails does not fail loudly, it recurses. Raised by PR-Agent
+    on #1696.
+    """
+    a = {"jobs": {"j": {"uses": "./.github/workflows/b.yml"}}}
+    b = {"jobs": {"j": {"uses": ".github/workflows/./b.yml"}}}  # same file, spelled twice
+    assert dh._normalise("./.github/workflows/b.yml") == dh._normalise(".github/workflows/./b.yml")
+    assert dh.reaches_delivery(a, lambda _: b) is False

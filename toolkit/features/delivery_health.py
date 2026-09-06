@@ -66,7 +66,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
 
 #: Triggers whose presence means a failure to start is ALREADY reported.
@@ -166,6 +166,15 @@ def _steps(workflow: dict[str, Any]) -> Iterable[dict[str, Any]]:
                 yield step
 
 
+def _normalise(uses: str) -> str:
+    """One key per referenced file, whatever the reference looked like.
+
+    `./a/b.yml`, `a/b.yml` and `./a/./b.yml` are the same file to Actions but
+    three different strings to a set.
+    """
+    return str(PurePosixPath(uses.split("@")[0]))
+
+
 def reaches_delivery(
     workflow: dict[str, Any],
     resolve: Callable[[str], dict[str, Any] | None],
@@ -180,16 +189,22 @@ def reaches_delivery(
     Reads the parsed document, never the file text — a text search matched
     `pr-agent.yml`, where `deployment promote` appears inside a comment
     explaining the delivery model.
+
+    The cycle key is the NORMALISED path, not the raw `uses:` string. Every local
+    reference in this repository carries the `./` prefix Actions requires, so two
+    spellings of one file is theoretical here — but a guard keyed on spelling
+    fails silently and recurses, and normalising costs one call.
     """
     for step in _steps(workflow):
         uses = step.get("uses")
         if isinstance(uses, str):
             if PUBLISHER in uses:
                 return True
-            if uses in _seen:
+            key = _normalise(uses)
+            if key in _seen:
                 continue
             callee = resolve(uses)
-            if callee is not None and reaches_delivery(callee, resolve, _seen | {uses}):
+            if callee is not None and reaches_delivery(callee, resolve, _seen | {key}):
                 return True
         run = step.get("run")
         if isinstance(run, str) and PROMOTE in run:
