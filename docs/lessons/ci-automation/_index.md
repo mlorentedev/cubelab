@@ -1,9 +1,11 @@
 # CI workflows, gates and the GitHub surface
 
-30 lessons, newest first. Back to [all categories](../_index.md).
+32 lessons, newest first. Back to [all categories](../_index.md).
 
 | # | Lesson | Date |
 |---|---|---|
+| 446 | [A Dependabot pull request reads an empty secret store, so a reviewer that needs a credential must say it cannot run — not fail](lesson-446-a-dependabot-pull-request-reads-an-empty-secret-store-so-a-reviewer-that-needs-one-must-say-it-cannot-run.md) | 2026-08-24 |
+| 445 | [A hint step guarded by a bare `failure()` names a cause it never observed — and a named cause gets acted on](lesson-445-a-hint-guarded-by-a-bare-failure-names-a-cause-it-never-observed.md) | 2026-08-25 |
 | 441 | [A reusable workflow has no runs of its own, so a monitor pointed at one is red forever — and the ticket said to point one at it](lesson-441-a-reusable-workflow-has-no-runs-so-a-watcher-pointed-at-one-is-red-forever.md) | 2026-09-06 |
 | 439 | [A caller's `permissions:` block is a ceiling, and a run that breaks it never starts — so nothing turns red](lesson-439-a-callers-permissions-block-is-a-ceiling-and-the-run-never-starts.md) | 2026-09-05 |
 | 438 | [A declared automation is not an executed one — check the route the failure actually takes](lesson-438-a-declared-automation-is-not-an-executed-one.md) | 2026-09-05 |
