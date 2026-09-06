@@ -621,6 +621,103 @@ def _get_provenance(file_path: Path, target_path: Path | None = None) -> tuple[s
     return ts, source_hash
 
 
+def _discover_fleet_nodes(networking: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Extract ordered fleet nodes from networking SSOT."""
+    discovered: list[tuple[str, dict[str, Any]]] = []
+    nodes_dict = networking.get("nodes", {}) if isinstance(networking.get("nodes"), dict) else {}
+
+    for node_id in NODE_CATALOG_DEFAULTS:
+        if node_id == "vps" and isinstance(networking.get("vps"), dict):
+            discovered.append((node_id, networking["vps"]))
+        elif node_id == "gcp1" and isinstance(networking.get("gcp"), dict):
+            discovered.append((node_id, networking["gcp"]))
+        elif node_id == "aws1" and isinstance(networking.get("aws"), dict):
+            discovered.append((node_id, networking["aws"]))
+        elif node_id in nodes_dict and isinstance(nodes_dict[node_id], dict):
+            discovered.append((node_id, nodes_dict[node_id]))
+
+    for node_id, node_cfg in nodes_dict.items():
+        if node_id not in NODE_CATALOG_DEFAULTS and isinstance(node_cfg, dict):
+            discovered.append((node_id, node_cfg))
+
+    return discovered
+
+
+def _resolve_node_status(node_cfg: dict[str, Any]) -> tuple[str, bool]:
+    """Return (status, is_active) for a fleet node."""
+    if node_cfg.get("retired") or node_cfg.get("status") == "standby":
+        return "standby", False
+    if node_cfg.get("status") == "warning":
+        return "warning", True
+    return "healthy", True
+
+
+def _resolve_node_tier(node_id: str, node_cfg: dict[str, Any], defaults: dict[str, Any]) -> str:
+    """Determine node tier (cloud vs homelab)."""
+    is_always_on = node_cfg.get("location") == "always-on"
+    is_cloud = is_always_on and (node_id in ("vps", "gcp1", "aws1") or "cloud" in defaults.get("provider", "").lower())
+    return "cloud" if is_cloud else "homelab"
+
+
+def _resolve_node_runtime(
+    node_id: str,
+    node_cfg: dict[str, Any],
+    defaults: dict[str, Any],
+    k8s_node_ids: set[str],
+    is_retired: bool,
+) -> str:
+    """Determine workload runtime scheduler for a node."""
+    if is_retired:
+        return "standby"
+    ansible_groups = node_cfg.get("ansible_groups", [])
+    if node_id in k8s_node_ids or "k3s_cluster" in ansible_groups or node_cfg.get("k3s_version"):
+        return "k3s"
+    if "dev_node" in ansible_groups or "docker_hosts" in ansible_groups or "forge" in ansible_groups:
+        return "docker"
+    return defaults.get("runtime", "systemd")
+
+
+def _resolve_node_environment(node_id: str) -> str:
+    """Return environment classification for a node."""
+    env_map = {"vps": "Production", "gcp1": "Production", "ace1": "Staging", "jetson": "Edge AI"}
+    return env_map.get(node_id, "Infrastructure")
+
+
+def _project_single_node(
+    node_id: str,
+    node_cfg: dict[str, Any],
+    k8s_node_ids: set[str],
+) -> tuple[dict[str, Any], bool]:
+    """Project a single node definition."""
+    defaults = NODE_CATALOG_DEFAULTS.get(node_id, {})
+    status, is_active = _resolve_node_status(node_cfg)
+    tier = _resolve_node_tier(node_id, node_cfg, defaults)
+    runtime = _resolve_node_runtime(node_id, node_cfg, defaults, k8s_node_ids, status == "standby")
+    env = _resolve_node_environment(node_id)
+
+    entry = {
+        "id": node_id,
+        "name": defaults.get("name") or node_cfg.get("dashboard", {}).get("display_name") or node_id,
+        "tier": tier,
+        "role": defaults.get("role", ""),
+        "roleEs": defaults.get("roleEs", ""),
+        "summary": defaults.get("summary", ""),
+        "summaryEs": defaults.get("summaryEs", ""),
+        "environment": env,
+        "provider": defaults.get("provider", "On-Premises Homelab" if tier == "homelab" else "Cloud"),
+        "arch": defaults.get("arch", "x86_64"),
+        "cpu": defaults.get("cpu", ""),
+        "ram": defaults.get("ram", ""),
+        "storage": defaults.get("storage", ""),
+        "os": defaults.get("os", "Ubuntu 24.04 LTS"),
+        "location": defaults.get("location", "Homelab (USA)" if tier == "homelab" else "Cloud"),
+        "status": status,
+        "runtime": runtime,
+        "runtimeRole": defaults.get("runtimeRole", ""),
+    }
+    return entry, is_active
+
+
 def project_nodes(config: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int, int]:
     """Dynamically project fleet nodes from networking and clusters SSOT in common.yaml.
 
@@ -630,89 +727,94 @@ def project_nodes(config: dict[str, Any]) -> tuple[list[dict[str, Any]], int, in
     networking = config.get("networking", {})
     clusters = config.get("clusters", {})
 
-    discovered_nodes: list[tuple[str, dict[str, Any]]] = []
-    nodes_dict = networking.get("nodes", {}) if isinstance(networking.get("nodes"), dict) else {}
-
-    # 1. Canonical order from catalog defaults, only if declared in networking
-    for node_id in NODE_CATALOG_DEFAULTS:
-        if node_id == "vps" and "vps" in networking and isinstance(networking["vps"], dict):
-            discovered_nodes.append((node_id, networking["vps"]))
-        elif node_id == "gcp1" and "gcp" in networking and isinstance(networking["gcp"], dict):
-            discovered_nodes.append((node_id, networking["gcp"]))
-        elif node_id == "aws1" and "aws" in networking and isinstance(networking["aws"], dict):
-            discovered_nodes.append((node_id, networking["aws"]))
-        elif node_id in nodes_dict and isinstance(nodes_dict[node_id], dict):
-            discovered_nodes.append((node_id, nodes_dict[node_id]))
-
-    # 2. Extra nodes present in networking.nodes not in catalog defaults
-    for node_id, node_cfg in nodes_dict.items():
-        if node_id not in NODE_CATALOG_DEFAULTS and isinstance(node_cfg, dict):
-            discovered_nodes.append((node_id, node_cfg))
-
-    k8s_node_ids: set[str] = set()
-    for c in clusters.values():
-        if isinstance(c, dict) and c.get("node"):
-            k8s_node_ids.add(str(c["node"]))
+    discovered_nodes = _discover_fleet_nodes(networking)
+    k8s_node_ids = {str(c["node"]) for c in clusters.values() if isinstance(c, dict) and c.get("node")}
 
     projected: list[dict[str, Any]] = []
     active_count = 0
 
     for node_id, node_cfg in discovered_nodes:
-        defaults = NODE_CATALOG_DEFAULTS.get(node_id, {})
-        is_retired = bool(node_cfg.get("retired") or node_cfg.get("status") == "standby")
-
-        status = "standby" if is_retired else ("warning" if node_cfg.get("status") == "warning" else "healthy")
-        if status != "standby":
+        entry, is_active = _project_single_node(node_id, node_cfg, k8s_node_ids)
+        if is_active:
             active_count += 1
-
-        is_always_on = node_cfg.get("location") == "always-on"
-        is_cloud = is_always_on and (
-            node_id in ("vps", "gcp1", "aws1") or "cloud" in defaults.get("provider", "").lower()
-        )
-        tier = "cloud" if is_cloud else "homelab"
-
-        ansible_groups = node_cfg.get("ansible_groups", [])
-        if is_retired:
-            runtime = "standby"
-        elif node_id in k8s_node_ids or "k3s_cluster" in ansible_groups or node_cfg.get("k3s_version"):
-            runtime = "k3s"
-        elif "dev_node" in ansible_groups or "docker_hosts" in ansible_groups or "forge" in ansible_groups:
-            runtime = "docker"
-        else:
-            runtime = defaults.get("runtime", "systemd")
-
-        if node_id in ("vps", "gcp1"):
-            env = "Production"
-        elif node_id == "ace1":
-            env = "Staging"
-        elif node_id == "jetson":
-            env = "Edge AI"
-        else:
-            env = "Infrastructure"
-
-        entry = {
-            "id": node_id,
-            "name": defaults.get("name") or node_cfg.get("dashboard", {}).get("display_name") or node_id,
-            "tier": tier,
-            "role": defaults.get("role", ""),
-            "roleEs": defaults.get("roleEs", ""),
-            "summary": defaults.get("summary", ""),
-            "summaryEs": defaults.get("summaryEs", ""),
-            "environment": env,
-            "provider": defaults.get("provider", "On-Premises Homelab" if tier == "homelab" else "Cloud"),
-            "arch": defaults.get("arch", "x86_64"),
-            "cpu": defaults.get("cpu", ""),
-            "ram": defaults.get("ram", ""),
-            "storage": defaults.get("storage", ""),
-            "os": defaults.get("os", "Ubuntu 24.04 LTS"),
-            "location": defaults.get("location", "Homelab (USA)" if tier == "homelab" else "Cloud"),
-            "status": status,
-            "runtime": runtime,
-            "runtimeRole": defaults.get("runtimeRole", ""),
-        }
         projected.append(entry)
 
     return projected, active_count, len(clusters), len(k8s_node_ids)
+
+
+def _collect_ssot_services(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Index all service configurations declared in SSOT."""
+    apps = config.get("apps", {})
+    services_by_cat = apps.get("services", {})
+    platform_apps = apps.get("platform", {})
+    infra = config.get("infra", {})
+    argocd = config.get("argocd", {})
+
+    ssot_blocks: dict[str, dict[str, Any]] = {}
+    if isinstance(services_by_cat, dict):
+        for cat_svcs in services_by_cat.values():
+            if isinstance(cat_svcs, dict):
+                for svc_name, svc_cfg in cat_svcs.items():
+                    if isinstance(svc_cfg, dict):
+                        ssot_blocks[svc_name] = svc_cfg
+                        ssot_blocks[svc_name.replace("_", "-")] = svc_cfg
+
+    if "api" in platform_apps and isinstance(platform_apps["api"], dict):
+        ssot_blocks["kubelab-api"] = platform_apps["api"]
+    if isinstance(argocd, dict) and argocd:
+        ssot_blocks["argocd"] = argocd
+    if "postgres" in infra and isinstance(infra["postgres"], dict):
+        ssot_blocks["postgresql"] = infra["postgres"]
+    if "traefik" not in ssot_blocks and "traefik" in config.get("edge", {}):
+        ssot_blocks["traefik"] = config["edge"]["traefik"]
+
+    return ssot_blocks
+
+
+def _project_single_service(defaults: dict[str, Any], svc_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Project and sanitize a single platform service."""
+    slug = defaults["slug"]
+    domain = svc_cfg.get("domain", "")
+    health_path = svc_cfg.get("health_path", "")
+
+    # Determine public accessibility:
+    is_ssot_public = svc_cfg.get("public") if "public" in svc_cfg else svc_cfg.get("is_public")
+    if is_ssot_public is not None:
+        is_public = bool(is_ssot_public)
+    else:
+        is_public = defaults.get("isPublic") is True
+
+    if is_public:
+        url = (f"https://{domain}" if domain else None) or defaults.get("url")
+        health_endpoint = (f"https://{domain}{health_path}" if domain and health_path else None) or defaults.get(
+            "healthEndpoint"
+        )
+    else:
+        url = None
+        health_endpoint = None
+
+    entry: dict[str, Any] = {
+        "slug": slug,
+        "name": defaults.get("name") or svc_cfg.get("name") or slug,
+        "category": defaults["category"],
+        "categoryEs": defaults["categoryEs"],
+        "description": defaults["description"],
+        "descriptionEs": defaults["descriptionEs"],
+    }
+    if url is not None:
+        entry["url"] = url
+    if health_endpoint is not None:
+        entry["healthEndpoint"] = health_endpoint
+    entry.update(
+        {
+            "node": defaults.get("node", "vps"),
+            "env": defaults.get("env", "prod"),
+            "tech": defaults.get("tech", []),
+            "isPublic": is_public,
+            "status": defaults.get("status", "operational"),
+        }
+    )
+    return entry
 
 
 def project_services(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -722,83 +824,8 @@ def project_services(config: dict[str, Any]) -> list[dict[str, Any]]:
     - Public services receive public URL and public health endpoint.
     - Private / internal services strictly omit 'url' and 'healthEndpoint'.
     """
-    apps = config.get("apps", {})
-    services_by_cat = apps.get("services", {})
-    platform_apps = apps.get("platform", {})
-    infra = config.get("infra", {})
-    argocd = config.get("argocd", {})
-
-    ssot_service_blocks: dict[str, dict[str, Any]] = {}
-    if isinstance(services_by_cat, dict):
-        for cat_svcs in services_by_cat.values():
-            if isinstance(cat_svcs, dict):
-                for svc_name, svc_cfg in cat_svcs.items():
-                    if isinstance(svc_cfg, dict):
-                        ssot_service_blocks[svc_name] = svc_cfg
-                        ssot_service_blocks[svc_name.replace("_", "-")] = svc_cfg
-
-    # Well-known overlays from platform, infra, argocd, edge
-    if "api" in platform_apps and isinstance(platform_apps["api"], dict):
-        ssot_service_blocks["kubelab-api"] = platform_apps["api"]
-    if isinstance(argocd, dict) and argocd:
-        ssot_service_blocks["argocd"] = argocd
-    if "postgres" in infra and isinstance(infra["postgres"], dict):
-        ssot_service_blocks["postgresql"] = infra["postgres"]
-    if "traefik" not in ssot_service_blocks and "traefik" in config.get("edge", {}):
-        ssot_service_blocks["traefik"] = config["edge"]["traefik"]
-
-    projected: list[dict[str, Any]] = []
-
-    for defaults in SERVICE_CATALOG_DEFAULTS:
-        slug = defaults["slug"]
-        svc_cfg = ssot_service_blocks.get(slug, {})
-
-        domain = svc_cfg.get("domain", "")
-        health_path = svc_cfg.get("health_path", "")
-
-        # Determine public accessibility:
-        # 1. Explicit declaration in common.yaml SSOT (`public: true` or `is_public: true`)
-        # 2. Catalog default if not overridden in SSOT
-        is_ssot_public = svc_cfg.get("public") if "public" in svc_cfg else svc_cfg.get("is_public")
-        if is_ssot_public is not None:
-            is_public = bool(is_ssot_public)
-        else:
-            is_public = defaults.get("isPublic") is True
-
-        if is_public:
-            url = (f"https://{domain}" if domain else None) or defaults.get("url")
-            health_endpoint = (f"https://{domain}{health_path}" if domain and health_path else None) or defaults.get(
-                "healthEndpoint"
-            )
-        else:
-            url = None
-            health_endpoint = None
-
-        entry: dict[str, Any] = {
-            "slug": slug,
-            "name": defaults.get("name") or svc_cfg.get("name") or slug,
-            "category": defaults["category"],
-            "categoryEs": defaults["categoryEs"],
-            "description": defaults["description"],
-            "descriptionEs": defaults["descriptionEs"],
-        }
-        if url is not None:
-            entry["url"] = url
-        if health_endpoint is not None:
-            entry["healthEndpoint"] = health_endpoint
-        entry.update(
-            {
-                "node": defaults.get("node", "vps"),
-                "env": defaults.get("env", "prod"),
-                "tech": defaults.get("tech", []),
-                "isPublic": is_public,
-                "status": defaults.get("status", "operational"),
-            }
-        )
-
-        projected.append(entry)
-
-    return projected
+    ssot_service_blocks = _collect_ssot_services(config)
+    return [_project_single_service(d, ssot_service_blocks.get(d["slug"], {})) for d in SERVICE_CATALOG_DEFAULTS]
 
 
 def compute_total_services(config: dict[str, Any]) -> int:

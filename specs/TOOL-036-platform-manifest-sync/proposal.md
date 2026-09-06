@@ -21,8 +21,7 @@ Provide `tk sync platform-json` (and `make sync-platform-json` / `make sync-plat
 - **Fleet & Cluster Summary**: Compute `activeNodes`, `totalServices`, `kubernetesClusters`, and `kubernetesNodes` directly from `common.yaml`.
 - **Node Topology**: Project the 9 fleet nodes (`vps`, `gcp1`, `ace1`, `ace2`, `jetson`, `beelink`, `rpi4`, `rpi3`, `aws1`) with hardware specifications, runtime (`k3s`, `docker`, `systemd`, `standby`), roles, and environments.
 - **Services Catalog**: Project platform services across categories (`AI & Inference`, `Core Gateway`, `GitOps & Delivery`, `Observability`, `Storage & Data`), tech stacks, and access boundaries (`public` vs `mesh`/`auth`).
-- **Architecture Diagrams**: Export Mermaid diagram specifications (`topology`, `gitops`, `security`, `ai-mcp`, `dns`) aligned with the SSOT.
-- **Provenance & Drift Detection**: Populate `generated_at` (ISO 8601) and `source_commit` (`git rev-parse HEAD`), with `--check` returning exit 1 on drift.
+- **Provenance & Drift Detection**: Populate `generated_at` (ISO 8601 UTC) and `source_commit` (deterministic git blob SHA-1 hash of `common.yaml`), preserving timestamp across clean drift checks to eliminate chicken-and-egg commit boundaries, with `--check` returning exit 1 on drift.
 
 ## Out of scope
 
