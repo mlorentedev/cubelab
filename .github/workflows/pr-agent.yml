@@ -453,11 +453,14 @@ jobs:
           fi
           if [ -z "$marker" ] && [ -n "${HEAD_SHA:-}" ]; then
             # The default branch has no github-actions entry yet: the PR introducing it.
-            # Safe because the comment must still be AUTHORED by github-actions[bot]
-            # after this run's start, which a PR cannot forge.
-            marker=$(read_marker "${HEAD_SHA}")
-            [ -n "$marker" ] && echo "::notice::review marker read from the PR head:" \
-              "the default branch has no reviewer registry entry yet"
+            # The head registry only proves the entry EXISTS; the marker is PR-Agent's own
+            # heading, never text a PR could choose (CWE-345). Author and start-stamp
+            # binding below still apply.
+            if [ -n "$(read_marker "${HEAD_SHA}")" ]; then
+              marker="PR Reviewer Guide"
+              echo "::notice::reviewer registry entry found only on the PR head;" \
+                "using PR-Agent's own heading as the marker"
+            fi
           fi
           if [ -z "$marker" ] || [ "$marker" = "null" ]; then
             echo "::error::no review marker declared for github-actions in" \
