@@ -128,6 +128,7 @@ jobs:
       (github.event_name == 'pull_request'
         && github.event.pull_request.draft == false
         && github.actor != 'dependabot[bot]'
+        && github.event.pull_request.head.repo.fork == false
         && !startsWith(github.head_ref, 'release-please--')
         && !startsWith(github.head_ref, 'deploy/')
         && !startsWith(github.head_ref, 'promote/'))
@@ -328,6 +329,29 @@ jobs:
             gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels/${label}" --silent
           fi
 
+      # Captured BEFORE PR-Agent runs so the guard below can bind its verdict to
+      # THIS run: with `persistent_comment` PR-Agent edits its earlier Guide, which
+      # moves `updated_at`; a Guide left by a previous run and never touched by
+      # this one stays older than this stamp and no longer satisfies the guard.
+      - name: Stamp run start
+        id: start
+        run: echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      # PR-Agent swallows an authentication failure and exits green, so without
+      # this step a missing secret surfaces only as "published no review". The
+      # presence test travels as a boolean env var (secrets is not a step-if
+      # context); the value never does.
+      - name: Fail if the reviewer has no credential
+        id: credential
+        if: steps.reviewable.outputs.any == 'true'
+        env:
+          HAS_NAN_API_KEY: ${{ secrets.NAN_API_KEY != '' }}
+        run: |
+          if [ "${HAS_NAN_API_KEY}" != "true" ]; then
+            echo "::error::NAN_API_KEY is not set in this repository's Actions secrets, so PR-Agent cannot review."
+            echo "::error::Remedy: add ci:${GITHUB_REPOSITORY} to NAN_API_KEY's consumers in" \
+              "dotfiles/secrets/registry.yaml, then run: dotf secrets sync ci --repo ${GITHUB_REPOSITORY}"
+            exit 1
+          fi
       - name: PR-Agent
         if: steps.reviewable.outputs.any == 'true'
         # Pinned by COMMIT SHA, not by tag, and this deliberately exceeds the
@@ -346,6 +370,12 @@ jobs:
           # id in `.pr_agent.toml` is for the same reason; nothing talks to OpenAI.
           OPENAI__KEY: ${{ secrets.NAN_API_KEY }}
           OPENAI__API_BASE: https://api.nan.builders/v1
+          # PR-Agent loads .pr_agent.toml from the default branch, so the PR that changes
+          # the model there reviews with the old one until merge; the workflow file is
+          # read from the PR head, so the model travels here too. Keep the two in step.
+          CONFIG__MODEL: openai/mimo-v2.5
+          CONFIG__FALLBACK_MODELS: '["openai/deepseek-v4-flash"]'
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "200000"
           CONFIG__PUBLISH_OUTPUT_PROGRESS: false
           # Stated rather than defaulted, so the event lists are visible instead
           # of implied. `synchronize` is NOT here on purpose — see the trigger
@@ -393,6 +423,7 @@ jobs:
       - name: Fail if no review was published
         if: >
           always() && steps.reviewable.outputs.any == 'true'
+            && steps.credential.outcome != 'failure'
             && (github.event_name == 'pull_request'
             || (github.event_name == 'issue_comment'
                 && contains(github.event.comment.body, '/review')))
@@ -407,22 +438,49 @@ jobs:
           # exact input for the same reason, so the port takes the hardened form
           # rather than reintroducing a decision this repository already made.
           BASE_REF: ${{ github.event.repository.default_branch }}
+          STARTED: ${{ steps.start.outputs.started }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
         run: |
           set -euo pipefail
-          marker=$(gh api "repos/${GITHUB_REPOSITORY}/contents/harness/review-attestation.json?ref=${BASE_REF}" \
-            --jq '.content' | base64 -d \
-            | jq -r '.reviewers[] | select(.login == "github-actions") | .review_markers[0]')
+          read_marker() { # $1 = ref; prints the marker or nothing; never aborts the step
+            gh api "repos/${GITHUB_REPOSITORY}/contents/harness/review-attestation.json?ref=$1" \
+              --jq '.content' 2>/dev/null | base64 -d 2>/dev/null \
+              | jq -r '.reviewers[] | select(.login == "github-actions") | .review_markers[0] // empty' 2>/dev/null || true
+          }
+          marker=$(read_marker "${BASE_REF}")
+          if [ -z "$marker" ] && [ -z "${HEAD_SHA:-}" ]; then
+            HEAD_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || true)
+          fi
+          if [ -z "$marker" ] && [ -n "${HEAD_SHA:-}" ]; then
+            # The default branch has no github-actions entry yet: the PR introducing it.
+            # The head registry only proves the entry EXISTS; the marker is PR-Agent's own
+            # heading, never text a PR could choose (CWE-345). Author and start-stamp
+            # binding below still apply.
+            if [ -n "$(read_marker "${HEAD_SHA}")" ]; then
+              marker="PR Reviewer Guide"
+              echo "::notice::reviewer registry entry found only on the PR head;" \
+                "using PR-Agent's own heading as the marker"
+            fi
+          fi
           if [ -z "$marker" ] || [ "$marker" = "null" ]; then
-            echo "::error::no review marker declared for github-actions in harness/review-attestation.json"
+            echo "::error::no review marker declared for github-actions in" \
+              "harness/review-attestation.json (checked ${BASE_REF} and the PR head)"
             exit 1
           fi
-          found=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --paginate --jq "[.[] | select(.body | contains(\"${marker}\"))] | length")
+          # --paginate emits one JSON array per page; jq -s slurps them into one array.
+          # Only comments AUTHORED by github-actions[bot] and updated at or after this
+          # run's start stamp count (a pasted marker or a stale Guide cannot vouch).
+          found=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            | jq -s --arg started "${STARTED}" --arg marker "${marker}" \
+                '[.[][] | select(.user.login == "github-actions[bot]"
+                                 and (.updated_at >= $started)
+                                 and (.body | contains($marker)))] | length')
           if [ "$found" -gt 0 ]; then
             echo "review published (marker: ${marker})"
             exit 0
           fi
-          echo "::error::PR-Agent reported success but published no review (no comment carries \"${marker}\")."
+          echo "::error::PR-Agent reported success but published no review" \
+            "(no github-actions[bot] comment updated since ${STARTED} carries \"${marker}\")."
           echo "::error::Two different causes land here and they look identical from outside."
           echo "::error::(1) Saturation: a 429 raises, .pr_agent.toml's fallback chain takes over,"
           echo "::error::and reaching here means BOTH models produced nothing. NaN limits per"
