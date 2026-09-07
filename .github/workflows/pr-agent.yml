@@ -456,7 +456,8 @@ jobs:
             # Safe because the comment must still be AUTHORED by github-actions[bot]
             # after this run's start, which a PR cannot forge.
             marker=$(read_marker "${HEAD_SHA}")
-            [ -n "$marker" ] && echo "::notice::review marker read from the PR head: the default branch has no reviewer registry entry yet"
+            [ -n "$marker" ] && echo "::notice::review marker read from the PR head:" \
+              "the default branch has no reviewer registry entry yet"
           fi
           if [ -z "$marker" ] || [ "$marker" = "null" ]; then
             echo "::error::no review marker declared for github-actions in" \
