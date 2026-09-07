@@ -1,5 +1,5 @@
 ---
-id: lesson-447-a-partial-view-of-a-corpus-answers-like-the-whole-corpus
+id: lesson-452-a-partial-view-of-a-corpus-answers-like-the-whole-corpus
 type: lesson
 status: active
 created: "2026-09-06"
@@ -8,12 +8,13 @@ category: process-method
 tags: [kubelab, process-method, memory, context, handoff, lessons-index]
 ---
 
-# A partial view of a corpus answers exactly like the whole corpus, and both halves of one session got caught by it
+# A partial view of a corpus answers exactly like the whole corpus, and it caught this lesson three times while it was being written
 
 **Context**: Housekeeping on `MEMORY.md`, the per-project index loaded into
 every session at startup, followed by filing a lesson about what that
-housekeeping found. Two questions were asked about a corpus in the space of an
-hour. Both were answered by something that only looked like the corpus.
+housekeeping found — and then the review of that lesson. Three questions were
+asked about a corpus in one evening. Each was answered by something that only
+looked like the corpus, and the third one landed on this file.
 
 **Problem**:
 
@@ -58,6 +59,26 @@ working tree alone.
 The output is the tell that there is no tell: `441` is a perfectly plausible
 answer. Nothing about it says "this is what the corpus looked like an hour ago".
 
+**Third, while this file sat in review: the number went stale a second time, and
+not by anyone's mistake.** This lesson was filed as `447`, correctly, against a
+`master` that ended at `446`. Someone then pressed GitHub's **Update branch**
+button on the pull request:
+
+```
+$ git log -1 --format='%h %cn <%ce> | %s' origin/docs/lesson-truncated-index-drops-newest
+7d48c571 GitHub <noreply@github.com> | Merge branch 'master' into docs/lesson-truncated-index-drops-newest
+```
+
+That merge brought in `identity-secrets/lesson-447`, which had landed on master
+in the meantime, and the branch then held two lesson `447`s. The reviewer
+reported it as a Major before any human noticed. Renumbered to `452`.
+
+Note what this instance adds: the first two were a stale view being *read*. This
+one is a correct view **going stale underneath a merged artifact** — the branch
+was right when pushed, and a server-side merge made it wrong without any local
+event to notice. It is the third route named in `#1678`, and neither local hook
+stage can reach it.
+
 **Solution**:
 
 For the index: condense oldest-first, against the durable record rather than
@@ -98,7 +119,15 @@ authoritative for it (`origin/master`, the ref; the file, not the loaded
 excerpt), because the difference is invisible in the result and only visible in
 the query.
 
-Two corollaries:
+**And asking the source is not a one-time act.** The third instance was answered
+correctly at the moment it was asked; a server-side merge invalidated it
+afterwards, with nothing local to notice. For anything that stays open — a pull
+request, a long-lived branch — the freshness of the answer expires, so the check
+belongs at the moment of *merging*, not only at the moment of authoring. That is
+why the counter guard is derived by a hook and asserted again in CI rather than
+computed once by the author: *"derived once is not derived"* (`#1649`).
+
+Three corollaries:
 
 - **"Only part of it was loaded" is a data-loss warning, not a size warning.**
   Read any truncation notice as a question about *which* part, and answer it
