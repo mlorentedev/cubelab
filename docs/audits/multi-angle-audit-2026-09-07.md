@@ -380,6 +380,68 @@ if a bookmark ever needs to carry a value that `common.yaml` already owns.
 
 Routine, no ticket: three zombie remote branches and three merged worktrees.
 
+---
+
+## 3d. #834's three open questions, answered
+
+#834's definition of done has two halves. The second — *"the three open questions
+are answered and any resulting fixes filed"* — was missed on the first pass of
+this report and flagged by pr-agent on the PR. Answered here so closing #834 does
+not close them with it.
+
+### Q1 — Is `apps/web` intentionally external?
+
+**Yes.** `git ls-files apps/web` returns **0** tracked files (as do `apps/blog`
+and `apps/wiki`); the extraction is ADR-053 and the blog was killed. The image
+arrives via `.github/workflows/web-image-receiver.yml`. So the README links that
+prompted the question are simply wrong, which is DOCS-001's scope, not a design
+uncertainty.
+
+### Q2 — Is the prod Docker-Compose stack retired, or hybrid mid-cutover?
+
+**Retired except Headscale, and that exception is permanent by design.**
+`infra/ansible/playbooks/deploy-vps.yml:74,84` gates both the `errors` and
+`traefik_vps` roles on `when: "'k3s_servers' not in group_names"`, so on the prod
+VPS — which is a `k3s_server` — neither runs and K3s Traefik owns 80/443.
+Headscale stays in Compose permanently per ADR-015 (bootstrapping: K3s nodes need
+Tailscale, Tailscale needs Headscale). Not mid-cutover; Pattern C completed.
+
+### Q3 — Is `homepage-secrets` wired via SOPS, or orphaned?
+
+**Orphaned.** Confirmed two independent ways.
+
+Statically, all three legs of the chain are missing:
+
+```
+toolkit/features/k8s_secrets.py:116-120
+    HOMEPAGE_VAR_CLOUDFLARE_TOKEN -> APPS_SERVICES_DASHBOARD_HOMEPAGE_CLOUDFLARE_TOKEN
+    HOMEPAGE_VAR_GITHUB_TOKEN     -> APPS_SERVICES_DASHBOARD_HOMEPAGE_GITHUB_TOKEN
+    HOMEPAGE_VAR_UPTIMEKUMA_KEY   -> APPS_SERVICES_DASHBOARD_HOMEPAGE_UPTIMEKUMA_KEY
+```
+
+- `SECRET_CATALOG` (`secrets_manager.py`) registers no `homepage` key.
+- `generator_k8s._find_var` has no `DASHBOARD` search path.
+- `make secrets-show KEY=apps.services.dashboard.homepage.{cloudflare,github}_token
+  SECRETS_ENV=prod` reports **absent** for both.
+
+And dynamically, from the live prod cockpit — measured while checking UX-1, for an
+unrelated reason: `https://home.kubelab.live/api/services` returns **zero services
+declaring a `widget`**. The Cloudflare, GitHub and Uptime Kuma widgets those
+tokens exist to populate are not merely unpopulated, they are not configured at
+all.
+
+The two measurements agree, which is what makes this an answer rather than a
+guess: the tokens resolve to nothing, and nothing consumes them.
+
+**Disposition**: the mapping should be deleted or wired, and `homepage-secrets`
+currently creates a Secret with three keys that are always empty. `secretKeyRef`
+here is non-fatal only because Homepage treats the vars as optional — the same
+shape as the defect PR #1732 just fixed for Grafana and MinIO, where the empty
+literal *was* fatal. **Filed as part of DASH-011's remaining scope? No** — filed
+separately, because it is a live orphan rather than a cosmetic one. See the
+disposition list above.
+
+
 ## 4. Not covered
 
 - The bitácora board (priority, status, in-review columns): GraphQL exhausted.
