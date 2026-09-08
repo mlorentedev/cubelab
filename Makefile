@@ -379,7 +379,7 @@ dev-full-clean: down-dev
 	@docker container prune -f || true
 	@echo "✓ Docker environment cleaned"
 
-.PHONY: dev-full-reset
+.PHONY: dev-full-reset dev-full-reset-resume
 dev-full-reset: dev-full-clean credentials-generate
 	@echo "============================================================"
 	@echo "--- MANUAL STEP REQUIRED ---"
@@ -389,8 +389,15 @@ dev-full-reset: dev-full-clean credentials-generate
 	@echo "  -> To do this, run: 'sops edit infra/config/secrets/dev.enc.yaml'"
 	@echo "  -> Paste the relevant sections from the output above."
 	@echo "  -> Save and close the editor (sops will encrypt it)."
-	@echo "Press ENTER to continue AFTER you have updated your secrets..."
-	@read -p "" # Pauses execution until user presses Enter
+	@echo ""
+	@echo "When the secrets are in place, run: make dev-full-reset-resume"
+	@echo "============================================================"
+
+# Second half of dev-full-reset. Split out because the two halves are separated
+# by a manual step, and the `read -p` that used to bridge them hung any
+# non-TTY caller (CI, an agent session, `make -j`) with no output explaining why.
+# A target boundary is the honest way to express "a human has to act here".
+dev-full-reset-resume:
 	@$(TOOLKIT) config generate --env dev # Regenerate config with updated secrets
 	@echo "--- Starting all services ---"
 	@$(TOOLKIT) services up crowdsec authelia traefik gitea n8n uptime loki grafana api errors minio github-runner --env dev

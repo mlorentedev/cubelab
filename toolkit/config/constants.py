@@ -381,6 +381,9 @@ class Messages:
     # TERRAFORM
     # =============================================================================
     ERROR_TERRAFORM_NOT_FOUND: str = "Terraform not found. Please install Terraform first."
+    WARNING_TERRAFORM_NOT_INSTALLED: str = (
+        "terraform binary not installed — skipping terraform validation (not a config defect)"
+    )
     ERROR_TERRAFORM_DIR_NOT_FOUND: str = "Terraform directory not found: {}"
     ERROR_TERRAFORM_INIT_FAILED: str = "Terraform init failed"
     ERROR_TERRAFORM_INIT_FAILED_WITH_ERROR: str = "Terraform init failed: {}"

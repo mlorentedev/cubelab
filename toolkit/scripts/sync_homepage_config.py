@@ -594,57 +594,6 @@ MERMAID_REQUEST = """graph LR
   class BLOCK block"""
 
 
-def build_ascii_topology(config: dict[str, Any]) -> str:  # noqa: E501
-    """Generate ASCII topology diagram from common.yaml."""
-    hub_name, hub_addr = hub_node(config)
-    networking = config.get("networking", {})
-    n = networking.get("nodes", {})
-    vps = networking.get("vps", {})
-    lan_cidr = networking.get("lan_cidr", "?")
-
-    vps_pub = vps.get("public_ip", "?")
-    vps_ts = vps.get("tailscale_ip", "?")
-
-    def node(name: str) -> tuple[str, str]:
-        nd = n.get(name, {})
-        return nd.get("lan_ip", "?"), nd.get("tailscale_ip", "?")
-
-    a1l, a1t = node("ace1")
-    a2l, a2t = node("ace2")
-    r4l, r4t = node("rpi4")
-    bel, bet = node("beelink")
-    jel, jet = node("jetson")
-    _, r3t = node("rpi3")
-
-    lines = [
-        "INTERNET",
-        f"  Cloudflare DNS --> VPS ({vps_pub})",
-        "",
-        "ALWAYS-ON 24/7 (ADR-028)",
-        f"  VPS        {vps_pub} / {vps_ts}  K3s Prod 8GB",
-        f"  {hub_name:<10} {hub_addr:<21} Argo CD Hub 2GB",
-        f"  RPi3       {r3t}                 Uptime Kuma 1GB",
-        "",
-        f"ON-DEMAND homelab {lan_cidr} (ADR-028)",
-        f"  ace1       {a1l} / {a1t}   K3s Staging 12GB",
-        f"  ace2       {a2l} / {a2t}     Dev node / CDE 12GB",
-        f"  Beelink    {bel} / {bet}     Platform Node 8GB",
-        f"  RPi4       {r4l} / {r4t}    DNS Gateway 8GB",
-        f"  Jetson     {jel} / {jet}     Pollex 4GB",
-        "",
-        "CONNECTIONS",
-        "  VPS <--> ace1      Tailscale",
-        f"  VPS <--> {hub_name:<10}Tailscale",
-        "  VPS <--> RPi3      Tailscale",
-        "  RPi4 <-> VPS       Tailscale",
-        "  ace1 --- ace2      LAN",
-        "  ace1 --- RPi4      LAN",
-        "  ace1 --- Beelink   LAN",
-        "  ace1 --- Jetson    LAN",
-    ]
-    return "\n".join(lines)
-
-
 def build_ip_reference(config: dict[str, Any]) -> str:  # noqa: E501
     """Generate IP reference table from common.yaml."""
     hub_name, hub_addr = hub_node(config)

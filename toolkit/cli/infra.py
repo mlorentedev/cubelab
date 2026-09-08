@@ -1343,7 +1343,7 @@ def ansible_run(
 
     if not inventory.exists():
         logger.error(f"Inventory not found: {inventory}")
-        logger.info("Run 'toolkit infra ansible generate --env {env}' first")
+        logger.info(f"Run 'toolkit infra ansible generate --env {env}' first")
         raise typer.Exit(1) from None
 
     if not playbook_path.exists():

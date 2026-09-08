@@ -1746,10 +1746,13 @@ class SecretsManager:
         # Convert dot path to sops JSON path: a.b.c → ["a"]["b"]["c"]
         sops_path = "".join(f'["{k}"]' for k in key_path.split("."))
 
+        import json
         import subprocess
 
+        # `sops set` takes a JSON value. Hand-quoting corrupts any value
+        # containing a double quote or a backslash; json.dumps escapes both.
         result = subprocess.run(
-            ["sops", "set", str(sops_file), sops_path, f'"{value}"'],
+            ["sops", "set", str(sops_file), sops_path, json.dumps(value)],
             capture_output=True,
             text=True,
             env=age_key_env(),  # auto-discover SOPS_AGE_KEY_FILE (toolkit/core/sops.py)
