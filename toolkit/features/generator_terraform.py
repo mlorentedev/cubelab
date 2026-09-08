@@ -59,16 +59,21 @@ class TerraformGenerator(BaseGenerator):
 
         return {"success": True, "services_count": len(env_services)}
 
-    def validate(self) -> bool:
+    def validate(self) -> bool | None:
         """Validate Terraform setup and configuration.
 
         Returns:
-            True if validation passes, False otherwise
+            True if validation passes, False if it fails, and None if the
+            terraform binary is absent. The third case is deliberately not a
+            failure: `make validate` asks whether the *configuration* is valid,
+            and a box without the binary cannot answer that question either way.
+            Reporting it as invalid made `make validate` fail for a reason
+            unrelated to config validity.
         """
         try:
             if command.run("which terraform", check=False).returncode != 0:
-                logger.error(MESSAGES.ERROR_TERRAFORM_NOT_FOUND)
-                return False
+                logger.warning(MESSAGES.WARNING_TERRAFORM_NOT_INSTALLED)
+                return None
 
             from toolkit.config.settings import settings
 

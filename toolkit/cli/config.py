@@ -155,6 +155,12 @@ def validate(
                     logger.error(MESSAGES.ERROR_INVALID.format("service", svc))
                     continue
 
+                if result is None:
+                    # Validator could not run (required tool absent). Not a
+                    # config defect, so it must not count against the total.
+                    total_count -= 1
+                    continue
+
                 if result:
                     success_count += 1
                     logger.success(MESSAGES.SUCCESS_CONFIG_VALIDATION_PASSED.format(svc))

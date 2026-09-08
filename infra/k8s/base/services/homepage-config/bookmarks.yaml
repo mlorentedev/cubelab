@@ -78,9 +78,6 @@
     - "Cloudflare R2":
         - icon: si-cloudflare
           href: https://dash.cloudflare.com/?to=/:account/r2/overview
-    - "AWS (~$4/mo)":
-        - icon: si-amazonaws
-          href: https://console.aws.amazon.com/billing
     - Vault:
         - icon: si-obsidian
           href: obsidian://vault/knowledge
